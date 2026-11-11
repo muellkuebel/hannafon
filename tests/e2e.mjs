@@ -405,8 +405,8 @@ async function run() {
 
     // Structural push endpoint (no delivery assertion locally)
     const health = await fetch(HEALTH).then((r) => r.json());
-    if (!health.ok || health.version !== "V1.01") throw new Error("health/version");
-    results.push("worker health V1.01");
+    if (!health.ok || health.version !== "V1.02") throw new Error("health/version");
+    results.push("worker health V1.02");
 
     console.log("E2E OK:", results.join(", "));
     console.log("screenshots:", fs.readdirSync(shots).join(", "));

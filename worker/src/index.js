@@ -3,7 +3,7 @@ import { sendWebPush } from "./push.js";
 
 export { HannafonRoom };
 
-const VERSION = "V1.01";
+const VERSION = "V1.02";
 
 function normalizeCode(code) {
   return String(code || "")

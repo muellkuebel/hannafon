@@ -1,6 +1,6 @@
 # Hannafon
 
-Lokale PWA für Familien-Videoanrufe (V1.01). Vanilla HTML, CSS und JavaScript.
+Lokale PWA für Familien-Videoanrufe (V1.02). Vanilla HTML, CSS und JavaScript.
 
 Live-Test (GitHub Pages + Cloudflare Worker):
 https://muellkuebel.github.io/hannafon/
@@ -26,7 +26,7 @@ npm run test:e2e
 
 ## Hinweise
 
-- Service-Worker-Cache: `hannafon-v1.01`
+- Service-Worker-Cache: `hannafon-v1.02`
 - Verstecktes Zurücksetzen: Hannafon-Schriftzug fünf Sekunden gedrückt halten (löscht auch den Familien-Code)
 - Empfänger können unten auf Standby „Dieses Gerät trennen“ tippen: nur dieses Gerät, der Familien-Code bleibt
 - Mehrere Geräte pro Person: jedes Gerät hat eine eigene ID, ein Anruf klingelt überall, das erste Annehmen gewinnt

@@ -1,4 +1,4 @@
-export const VERSION = "V1.01";
+export const VERSION = "V1.02";
 export const STORAGE_CODE = "hannafon-family-code";
 export const STORAGE_IDENTITY = "hannafon-identity";
 export const MEDIA_CACHE = "hannafon-media-v1.01";
