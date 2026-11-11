@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Hannafon">
+  <meta name="theme-color" content="#2F2118">
+  <title>Hannafon</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <button type="button" id="wordmark" class="wordmark" aria-label="Hannafon">Hannafon</button>
+    </header>
+
+    <section id="screen-code" class="screen hidden" hidden>
+      <div class="panel">
+        <h1>Familien-Code</h1>
+        <p class="lede">Bitte den Code eingeben, den du von der Familie bekommen hast.</p>
+        <form id="code-form" autocomplete="one-time-code">
+          <input id="code-input" name="code" type="text" inputmode="text" autocapitalize="characters"
+                 autocomplete="off" spellcheck="false" maxlength="20" placeholder="XXXX-XXXX" required>
+          <p id="code-error" class="error" hidden></p>
+          <button type="submit" class="pill pill-green">Weiter</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="screen-photo" class="screen hidden" hidden>
+      <div id="photo-stage" class="photo-stage">
+        <img id="photo-blur-fill" alt="">
+        <div id="photo-stack" class="photo-stack">
+          <img id="photo-blur" class="photo-layer" alt="">
+          <img id="photo-sharp" class="photo-layer" alt="Familienfoto">
+          <div id="hit-layer" class="hit-layer"></div>
+        </div>
+      </div>
+      <div id="topfade" class="topfade"></div>
+      <div id="greeting" class="greeting">
+        <p id="greeting-line1"></p>
+        <p id="greeting-line2"></p>
+      </div>
+      <div id="setup-title" class="setup-title hidden" hidden>
+        <h1>Wer bist du? Tippe auf dein Gesicht.</h1>
+      </div>
+      <div id="zoom-card" class="zoom-card hidden" hidden>
+        <p id="zoom-name" class="zoom-name"></p>
+        <button type="button" id="btn-confirm" class="pill pill-amber hidden" hidden>Das bin ich</button>
+        <button type="button" id="btn-call" class="pill pill-green hidden" hidden>
+          <span>Anrufen</span>
+          <svg class="icon-phone" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
+        </button>
+        <p id="zoom-soon" class="soon hidden" hidden>Bald verfügbar</p>
+      </div>
+    </section>
+
+    <section id="screen-standby" class="screen hidden" hidden>
+      <div class="panel standby-panel">
+        <div class="standby-copy">
+          <h1 id="standby-hello"></h1>
+          <p id="standby-sub" class="lede"></p>
+          <p id="standby-note" class="standby-note"></p>
+        </div>
+        <div class="standby-cta">
+          <div id="host-face-wrap" class="host-portrait" hidden>
+            <img id="host-face" alt="">
+          </div>
+          <button type="button" id="btn-call-host" class="pill pill-green pill-xl">
+          <span id="btn-call-host-label">Anrufen</span>
+          <svg class="icon-phone" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
+        </button>
+        </div>
+        <div id="install-hint" class="hint hidden" hidden>
+          Bitte diese Seite zum Home-Bildschirm hinzufügen, damit Anrufe auch als Mitteilung ankommen.
+        </div>
+        <button type="button" id="btn-notify" class="btn-text hidden" hidden>Mitteilungen erlauben</button>
+        <button type="button" id="btn-disconnect" class="btn-disconnect hidden" hidden>Dieses Gerät trennen</button>
+      </div>
+    </section>
+
+    <section id="screen-incoming" class="screen hidden" hidden>
+      <div class="panel incoming-panel">
+        <p id="incoming-title" class="incoming-title"></p>
+        <div class="incoming-actions">
+          <button type="button" id="btn-decline" class="pill pill-red">
+            <span>Ablehnen</span>
+            <svg class="icon-phone icon-decline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
+          </button>
+          <button type="button" id="btn-accept" class="pill pill-green">
+            <span>Annehmen</span>
+            <svg class="icon-phone" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-call" class="screen hidden" hidden>
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+      <p id="call-status" class="call-status"></p>
+      <button type="button" id="btn-hangup" class="pill pill-red pill-hangup">
+        <span>Auflegen</span>
+        <svg class="icon-phone icon-decline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
+      </button>
+    </section>
+
+    <div id="disconnect-sheet" class="reset-sheet hidden" hidden>
+      <p id="disconnect-copy" class="disconnect-copy"></p>
+      <button type="button" id="btn-disconnect-confirm" class="pill pill-red">Trennen</button>
+      <button type="button" id="btn-disconnect-cancel" class="btn-text">Abbrechen</button>
+    </div>
+    <div id="taken-toast" class="taken-toast hidden" hidden>Anderswo angenommen</div>
+
+    <div id="reset-sheet" class="reset-sheet hidden" hidden>
+      <p class="version">Hannafon V1.01</p>
+      <button type="button" id="btn-reset" class="pill pill-ink">Alles zurücksetzen</button>
+      <button type="button" id="btn-reset-cancel" class="btn-text">Abbrechen</button>
+    </div>
+  </div>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

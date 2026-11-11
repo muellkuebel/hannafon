@@ -1,0 +1,14 @@
+# Copy to .dev.vars (gitignored). Do not commit real values.
+# Never put the family code in plaintext here. Derive FAMILY_CODE_HASH
+# from the HANNAFON_FAMILY_CODE environment variable (SHA-256 of the
+# normalized code: uppercase, digits and letters only).
+FAMILY_CODE_HASH=
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:hannafon-local@localhost
+LOCAL_MEDIA_ORIGIN=http://127.0.0.1:4174
+ALLOWED_ORIGINS=http://127.0.0.1:4173,http://localhost:4173
+# Optional TURN, e.g. Cloudflare Calls:
+# TURN_URL=
+# TURN_USER=
+# TURN_PASS=

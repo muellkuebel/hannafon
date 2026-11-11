@@ -1,0 +1,28 @@
+{
+  "name": "hannafon",
+  "version": "1.0.0",
+  "description": "Hannafon local PWA. Family photo, masks, crops and names are not in this repository.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "sync-hash": "node scripts/sync-family-hash.mjs",
+    "test:e2e": "node tests/e2e.mjs",
+    "generate-assets": "python3 scripts/generate-assets.py"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "playwright": "^1.65.0",
+    "wrangler": "^4.160.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261110.1": true
+  },
+  "private": true
+}

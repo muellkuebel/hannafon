@@ -1,0 +1,18 @@
+{
+  "id": "/hannafon/",
+  "name": "Hannafon",
+  "short_name": "Hannafon",
+  "description": "Familien-Videoanrufe",
+  "start_url": "/hannafon/",
+  "scope": "/hannafon/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F6EFE3",
+  "theme_color": "#2F2118",
+  "lang": "de",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

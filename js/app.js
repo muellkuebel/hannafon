@@ -1,0 +1,937 @@
+import {
+  VERSION,
+  STORAGE_CODE,
+  STORAGE_IDENTITY,
+  STORAGE_DEVICE,
+  MEDIA_CACHE,
+  normalizeCode,
+  isHostPerson,
+  isTappable,
+  getDeviceId,
+} from "./config.js";
+import {
+  auth,
+  loadConfig,
+  mediaUrl,
+  clearMediaCache,
+  revokeMedia,
+  postSubscribe,
+  postUnsubscribe,
+  urlBase64ToUint8Array,
+} from "./api.js";
+import { Signaling } from "./signaling.js";
+import {
+  getLocalStream,
+  createPeer,
+  addIce,
+  flushIce,
+  stopStream,
+  closePeer,
+} from "./webrtc.js";
+import { startRingtone, stopRingtone } from "./audio.js";
+
+const $ = (id) => document.getElementById(id);
+
+const ui = {
+  code: $("screen-code"),
+  photo: $("screen-photo"),
+  standby: $("screen-standby"),
+  incoming: $("screen-incoming"),
+  call: $("screen-call"),
+  stage: $("photo-stage"),
+  stack: $("photo-stack"),
+  sharp: $("photo-sharp"),
+  blur: $("photo-blur"),
+  blurFill: $("photo-blur-fill"),
+  topfade: $("topfade"),
+  hits: $("hit-layer"),
+  greeting: $("greeting"),
+  greet1: $("greeting-line1"),
+  greet2: $("greeting-line2"),
+  setupTitle: $("setup-title"),
+  zoomCard: $("zoom-card"),
+  zoomName: $("zoom-name"),
+  btnConfirm: $("btn-confirm"),
+  btnCall: $("btn-call"),
+  zoomSoon: $("zoom-soon"),
+  wordmark: $("wordmark"),
+  resetSheet: $("reset-sheet"),
+  codeForm: $("code-form"),
+  codeInput: $("code-input"),
+  codeError: $("code-error"),
+  standbyHello: $("standby-hello"),
+  standbySub: $("standby-sub"),
+  standbyNote: $("standby-note"),
+  btnCallHost: $("btn-call-host"),
+  btnCallHostLabel: $("btn-call-host-label"),
+  hostFaceWrap: $("host-face-wrap"),
+  hostFace: $("host-face"),
+  installHint: $("install-hint"),
+  btnNotify: $("btn-notify"),
+  incomingTitle: $("incoming-title"),
+  btnAccept: $("btn-accept"),
+  btnDecline: $("btn-decline"),
+  remoteVideo: $("remote-video"),
+  localVideo: $("local-video"),
+  callStatus: $("call-status"),
+  btnHangup: $("btn-hangup"),
+  btnReset: $("btn-reset"),
+  btnResetCancel: $("btn-reset-cancel"),
+  btnDisconnect: $("btn-disconnect"),
+  disconnectSheet: $("disconnect-sheet"),
+  disconnectCopy: $("disconnect-copy"),
+  btnDisconnectConfirm: $("btn-disconnect-confirm"),
+  btnDisconnectCancel: $("btn-disconnect-cancel"),
+  takenToast: $("taken-toast"),
+};
+
+const state = {
+  code: "",
+  config: null,
+  identity: null,
+  mode: null, // "setup" | "host" | "standby"
+  zoomed: null,
+  layout: null,
+  maskUrls: new Map(),
+  signaling: new Signaling(),
+  pc: null,
+  localStream: null,
+  remoteStream: null,
+  pendingOffer: null,
+  pendingFrom: null,
+  inCallWith: null,
+  outgoing: false,
+  nav: { s: 1, x: 0, y: 0 },
+  navUser: false,
+  callId: null,
+  peerDevice: null,
+  pendingFromDevice: null,
+  gestureMoved: false,
+};
+
+function showScreen(name) {
+  const showPhoto = name === "photo" || name === "incoming";
+  for (const key of ["code", "photo", "standby", "incoming", "call"]) {
+    const el = ui[key];
+    const on = key === name || (key === "photo" && showPhoto);
+    el.classList.toggle("hidden", !on);
+    el.hidden = !on;
+  }
+  const app = document.getElementById("app");
+  app.classList.toggle("is-photo", showPhoto);
+  app.classList.toggle("is-in-call", name === "call");
+  if (!showPhoto) app.classList.remove("is-zoomed");
+}
+
+function setZoomedClass(on) {
+  ui.stage.classList.toggle("is-zoomed", on);
+  document.getElementById("app").classList.toggle("is-zoomed", on);
+  if (ui.topfade) ui.topfade.classList.toggle("is-hidden", on);
+}
+
+function show(el, on) {
+  if (!el) return;
+  el.classList.toggle("hidden", !on);
+  el.hidden = !on;
+}
+
+function hostPerson() {
+  const cfg = state.config;
+  if (!cfg) return null;
+  return (cfg.people || []).find((p) => isHostPerson(p, cfg)) || null;
+}
+
+function personByNr(nr) {
+  return (state.config?.people || []).find((p) => Number(p.nr) === Number(nr)) || null;
+}
+
+function photoLayout(viewW, viewH, photoW, photoH) {
+  // Portrait (iPhone): contain the whole group so every head is tappable.
+  // Landscape (iPad): cover the viewport as in the mockups.
+  const contain = viewH > viewW;
+  const scale = contain
+    ? Math.min(viewW / photoW, viewH / photoH)
+    : Math.max(viewW / photoW, viewH / photoH);
+  const dw = photoW * scale;
+  const dh = photoH * scale;
+  const ox = (viewW - dw) / 2;
+  const oy = (viewH - dh) / 2;
+  return { scale, ox, oy, dw, dh, contain };
+}
+
+function origToPhoto(p, photo) {
+  const sx = photo.width / photo.original[0];
+  const sy = photo.height / photo.original[1];
+  return { x: p.cx * sx, y: p.cy * sy, r: p.r * sx };
+}
+
+function applyStageLayout() {
+  const cfg = state.config;
+  if (!cfg?.photo) return;
+  const rect = ui.stage.getBoundingClientRect();
+  const layout = photoLayout(rect.width, rect.height, cfg.photo.width, cfg.photo.height);
+  state.layout = layout;
+  ui.stack.style.width = `${layout.dw}px`;
+  ui.stack.style.height = `${layout.dh}px`;
+  ui.stack.style.left = `${layout.ox}px`;
+  ui.stack.style.top = `${layout.oy}px`;
+  ui.stage.classList.toggle("is-pannable", !!layout.contain && !state.zoomed);
+  if (!layout.contain) {
+    state.nav = { s: 1, x: 0, y: 0 };
+    state.navUser = false;
+  } else if (!state.navUser) {
+    // Wide group photo on a tall phone: start height-covering and centered
+    // so heads are tappable; pinch out to see everyone.
+    const s = Math.min(4, Math.max(1, rect.height / layout.dh));
+    state.nav.s = s;
+    state.nav.x = (rect.width - layout.dw * s) / 2 - layout.ox;
+    state.nav.y = (rect.height - layout.dh * s) / 2 - layout.oy;
+  }
+  clampNav();
+  if (state.zoomed) applyZoom(state.zoomed, false);
+  else {
+    ui.stack.style.transition = "none";
+    applyNavTransform();
+    requestAnimationFrame(() => {
+      if (!state.zoomed) ui.stack.style.transition = "";
+    });
+  }
+  layoutHits();
+}
+
+function applyNavTransform() {
+  if (state.zoomed) return;
+  const s = state.nav.s || 1;
+  ui.stack.style.transform = `translate(${state.nav.x || 0}px, ${state.nav.y || 0}px) scale(${s})`;
+  updateChromeContrast();
+}
+
+function updateChromeContrast() {
+  const app = document.getElementById("app");
+  const layout = state.layout;
+  const letterboxed =
+    !!layout?.contain &&
+    !state.zoomed &&
+    layout.dh * (state.nav.s || 1) < (ui.stage.clientHeight - 8);
+  app.classList.toggle("is-letterboxed", letterboxed);
+}
+
+function clampNav() {
+  const layout = state.layout;
+  if (!layout) return;
+  const viewW = ui.stage.clientWidth;
+  const viewH = ui.stage.clientHeight;
+  state.nav.s = Math.min(4, Math.max(1, state.nav.s || 1));
+  const s = state.nav.s;
+  const minX = viewW - layout.ox - layout.dw * s;
+  const maxX = -layout.ox;
+  const minY = viewH - layout.oy - layout.dh * s;
+  const maxY = -layout.oy;
+  if (layout.dw * s <= viewW + 0.5) state.nav.x = (viewW - layout.dw * s) / 2 - layout.ox;
+  else state.nav.x = Math.min(maxX, Math.max(minX, state.nav.x));
+  if (layout.dh * s <= viewH + 0.5) state.nav.y = (viewH - layout.dh * s) / 2 - layout.oy;
+  else state.nav.y = Math.min(maxY, Math.max(minY, state.nav.y));
+}
+
+function zoomAtPoint(clientX, clientY, factor) {
+  const layout = state.layout;
+  if (!layout) return;
+  const rect = ui.stage.getBoundingClientRect();
+  const px = clientX - rect.left;
+  const py = clientY - rect.top;
+  const s0 = state.nav.s || 1;
+  const lx = (px - layout.ox - state.nav.x) / s0;
+  const ly = (py - layout.oy - state.nav.y) / s0;
+  state.nav.s = s0 * factor;
+  state.navUser = true;
+  clampNav();
+  state.nav.x = px - layout.ox - lx * state.nav.s;
+  state.nav.y = py - layout.oy - ly * state.nav.s;
+  clampNav();
+  applyNavTransform();
+}
+
+function layoutHits() {
+  ui.hits.innerHTML = "";
+  const layout = state.layout;
+  const photo = state.config?.photo;
+  if (!layout || !photo) return;
+  // No hit targets, halos, or zoom for untappable people (nr 7 and 12).
+  const targets = (state.config.people || []).filter(isTappable);
+  for (const p of targets) {
+    const f = origToPhoto(p, photo);
+    const r = Math.max(f.r * 2.2, state.layout.contain ? 32 : 28);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hit";
+    btn.dataset.nr = String(p.nr);
+    btn.setAttribute("aria-label", p.name);
+    const visR = f.r * layout.scale;
+    const haloR = visR * 1.6;
+    const halo = document.createElement("i");
+    halo.className = "halo";
+    halo.style.left = `${f.x * layout.scale - haloR}px`;
+    halo.style.top = `${f.y * layout.scale - haloR}px`;
+    halo.style.width = `${haloR * 2}px`;
+    halo.style.height = `${haloR * 2}px`;
+    ui.hits.appendChild(halo);
+
+    btn.style.left = `${f.x * layout.scale - r}px`;
+    btn.style.top = `${f.y * layout.scale - r}px`;
+    btn.style.pointerEvents = state.zoomed ? "none" : "auto";
+    btn.style.width = `${r * 2}px`;
+    btn.style.height = `${r * 2}px`;
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (state.gestureMoved) return;
+      onPersonTap(p);
+    });
+    ui.hits.appendChild(btn);
+  }
+}
+
+async function applyMask(person) {
+  const photo = state.config.photo;
+  if (!person?.mask?.file) {
+    ui.sharp.style.webkitMaskImage = "";
+    ui.sharp.style.maskImage = "";
+    ui.sharp.classList.remove("is-masked");
+    return;
+  }
+  let url = state.maskUrls.get(person.nr);
+  if (!url) {
+    url = await mediaUrl(state.code, person.mask.file);
+    state.maskUrls.set(person.nr, url);
+  }
+  const { scale } = state.layout;
+  const size = `${person.mask.w * scale}px ${person.mask.h * scale}px`;
+  const pos = `${person.mask.x * scale}px ${person.mask.y * scale}px`;
+  ui.sharp.style.webkitMaskImage = `url("${url}")`;
+  ui.sharp.style.maskImage = `url("${url}")`;
+  ui.sharp.style.webkitMaskSize = size;
+  ui.sharp.style.maskSize = size;
+  ui.sharp.style.webkitMaskPosition = pos;
+  ui.sharp.style.maskPosition = pos;
+  ui.sharp.style.webkitMaskRepeat = "no-repeat";
+  ui.sharp.style.maskRepeat = "no-repeat";
+  ui.sharp.classList.add("is-masked");
+}
+
+function clearMask() {
+  ui.sharp.style.webkitMaskImage = "";
+  ui.sharp.style.maskImage = "";
+  ui.sharp.classList.remove("is-masked");
+}
+
+async function applyZoom(person, animate = true) {
+  const layout = state.layout;
+  const photo = state.config.photo;
+  if (!layout || !photo) return;
+  const viewW = ui.stage.clientWidth;
+  const viewH = ui.stage.clientHeight;
+  const f = origToPhoto(person, photo);
+  const faceX = f.x * layout.scale;
+  const faceY = f.y * layout.scale;
+  let bw, bh;
+  if (person.mask) {
+    bw = person.mask.w * layout.scale;
+    bh = person.mask.h * layout.scale;
+  } else {
+    bw = f.r * 5 * layout.scale;
+    bh = f.r * 9 * layout.scale;
+  }
+  const targetH = viewH * 0.62;
+  const targetW = viewW * 0.88;
+  const zFit = Math.min(targetW / bw, targetH / bh) * 0.92;
+  // Always fill the viewport: never zoom out so far that edges show,
+  // and clamp the pan at the photo bounds (no black bars).
+  const zMin = Math.max(viewW / layout.dw, viewH / layout.dh) * 1.002;
+  const z = Math.max(zFit, zMin);
+  const lx = faceX;
+  const ly = faceY;
+  const destX = viewW / 2;
+  const destY = viewH * 0.28;
+  let tx = destX - layout.ox - lx * z;
+  let ty = destY - layout.oy - ly * z;
+  const txMin = viewW - layout.ox - layout.dw * z;
+  const txMax = -layout.ox;
+  const tyMin = viewH - layout.oy - layout.dh * z;
+  const tyMax = -layout.oy;
+  tx = Math.min(txMax, Math.max(txMin, tx));
+  ty = Math.min(tyMax, Math.max(tyMin, ty));
+  ui.stack.style.transition = animate ? "" : "none";
+  ui.stack.style.transform = `translate(${tx}px, ${ty}px) scale(${z})`;
+  ui.stage.classList.remove("is-pannable");
+  document.getElementById("app").classList.remove("is-letterboxed");
+  if (!animate) requestAnimationFrame(() => { ui.stack.style.transition = ""; });
+  await applyMask(person);
+  setZoomedClass(true);
+  ui.greeting.classList.add("is-hidden");
+  ui.setupTitle.classList.add("is-hidden");
+}
+
+function unzoom() {
+  state.zoomed = null;
+  setZoomedClass(false);
+  ui.stack.style.transition = "";
+  applyNavTransform();
+  ui.stage.classList.toggle("is-pannable", !!state.layout?.contain);
+  ui.greeting.classList.remove("is-hidden");
+  ui.setupTitle.classList.remove("is-hidden");
+  clearMask();
+  show(ui.btnConfirm, false);
+  show(ui.btnCall, false);
+  show(ui.zoomSoon, false);
+  show(ui.zoomCard, false);
+}
+
+async function onPersonTap(person) {
+  if (!isTappable(person)) return;
+  if (state.zoomed && state.zoomed.nr === person.nr) return;
+  state.zoomed = person;
+  ui.zoomName.textContent = person.name;
+  const setup = state.mode === "setup";
+  show(ui.btnConfirm, setup);
+  const isSelf = state.identity && Number(state.identity.nr) === Number(person.nr);
+  const canCall = !setup && state.mode === "host" && person.callable && !isHostPerson(person, state.config);
+  show(ui.btnCall, canCall);
+  show(ui.zoomSoon, !setup && state.mode === "host" && !canCall && !isSelf);
+  show(ui.zoomCard, true);
+  await applyZoom(person);
+}
+
+function onStageBackground(ev) {
+  if (!state.zoomed) return;
+  if (ev.target.closest(".zoom-card, .pill, .hit")) return;
+  unzoom();
+}
+
+function setGreeting() {
+  const me = state.identity;
+  const setup = state.mode === "setup";
+  show(ui.setupTitle, setup);
+  show(ui.greeting, !setup && state.mode === "host");
+  if (!setup && me) {
+    ui.greet1.textContent = `Hallo ${me.name},`;
+    ui.greet2.textContent = "wen willst du anrufen?";
+  }
+}
+
+async function paintHostPortrait() {
+  const host = hostPerson();
+  const photo = state.config?.photo;
+  if (!host || !photo || !ui.sharp.src) {
+    show(ui.hostFaceWrap, false);
+    return;
+  }
+  const img = ui.sharp;
+  const f = origToPhoto(host, photo);
+  const size = f.r * 2.3;
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  ctx.beginPath();
+  ctx.arc(128, 128, 128, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(img, f.x - size / 2, f.y - size / 2, size, size, 0, 0, 256, 256);
+  ui.hostFace.src = canvas.toDataURL("image/webp", 0.9);
+  ui.hostFace.alt = host.name;
+  show(ui.hostFaceWrap, true);
+}
+
+function isStandalone() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function paintStandby() {
+  const me = state.identity;
+  const host = hostPerson();
+  const hostName = host?.name || "";
+  ui.standbyHello.textContent = `Hallo ${me.name},`;
+  ui.standbySub.textContent = `du bist bereit für Anrufe von ${hostName}.`;
+  ui.btnCallHostLabel.textContent = `${hostName} anrufen`;
+  if (ui.standbyNote) {
+    ui.standbyNote.textContent = `Bitte Mitteilungen erlauben, damit du hörst, wenn ${hostName} anruft.`;
+  }
+  show(ui.installHint, !isStandalone());
+  const pushOk = "Notification" in window && "serviceWorker" in navigator && "PushManager" in window;
+  const already = pushOk && Notification.permission === "granted";
+  show(ui.btnNotify, pushOk && !already);
+  show(ui.btnDisconnect, true);
+}
+
+function goHome() {
+  unzoom();
+  if (!state.identity) {
+    state.mode = "setup";
+    setGreeting();
+    showScreen("photo");
+    applyStageLayout();
+    return;
+  }
+  if (isHostPerson(state.identity, state.config)) {
+    state.mode = "host";
+    setGreeting();
+    showScreen("photo");
+    applyStageLayout();
+  } else {
+    state.mode = "standby";
+    paintStandby();
+    showScreen("standby");
+  }
+}
+
+async function loadMedia() {
+  const files = state.config.photo.files || {};
+  const sharp = files.webp || files.jpg;
+  const blur = files.blurWebp || files.blurJpg;
+  const sharpUrl = await mediaUrl(state.code, sharp);
+  const blurUrl = await mediaUrl(state.code, blur);
+  ui.sharp.src = sharpUrl;
+  ui.blur.src = blurUrl;
+  if (ui.blurFill) ui.blurFill.src = blurUrl;
+  ui.sharp.alt = "Familienfoto";
+  await ui.sharp.decode().catch(() => {});
+  await paintHostPortrait();
+  // Prefetch masks in the background into Cache Storage.
+  for (const p of state.config.people || []) {
+    if (p.mask?.file) mediaUrl(state.code, p.mask.file).catch(() => {});
+  }
+}
+
+function consumeInviteCode() {
+  const url = new URL(location.href);
+  const raw = url.searchParams.get("code") || url.searchParams.get("familie") || "";
+  if (raw) {
+    url.searchParams.delete("code");
+    url.searchParams.delete("familie");
+    history.replaceState({}, "", url.pathname + url.search + url.hash);
+  }
+  return raw;
+}
+
+function incomingFromUrl() {
+  const url = new URL(location.href);
+  const inc = url.searchParams.get("incoming");
+  if (inc) {
+    url.searchParams.delete("incoming");
+    history.replaceState({}, "", url.pathname + url.search + url.hash);
+  }
+  return inc ? Number(inc) : null;
+}
+
+async function afterAuth(cfg, code) {
+  state.config = cfg;
+  state.code = normalizeCode(code);
+  localStorage.setItem(STORAGE_CODE, state.code);
+  await loadMedia();
+  const idNr = Number(localStorage.getItem(STORAGE_IDENTITY) || 0);
+  state.identity = idNr ? personByNr(idNr) : null;
+  if (state.identity) connectSignaling();
+  const incoming = incomingFromUrl();
+  goHome();
+  if (incoming && state.identity) {
+    // Push click opened the app; wait for the live signaling offer if any.
+  }
+}
+
+async function tryStoredCode() {
+  const stored = localStorage.getItem(STORAGE_CODE) || "";
+  const invite = consumeInviteCode();
+  const code = invite || stored;
+  if (!code) {
+    showScreen("code");
+    return;
+  }
+  try {
+    const cfg = stored && !invite ? await loadConfig(code) : await auth(code);
+    await afterAuth(cfg, code);
+  } catch {
+    localStorage.removeItem(STORAGE_CODE);
+    showScreen("code");
+    if (invite) {
+      ui.codeError.textContent = "Der Link-Code war ungültig.";
+      show(ui.codeError, true);
+    }
+  }
+}
+
+ui.codeForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  show(ui.codeError, false);
+  const raw = ui.codeInput.value;
+  try {
+    const cfg = await auth(raw);
+    await afterAuth(cfg, raw);
+  } catch (err) {
+    ui.codeError.textContent = err.message || "ungültiger Code";
+    show(ui.codeError, true);
+  }
+});
+
+ui.btnConfirm.addEventListener("click", () => {
+  if (!state.zoomed) return;
+  state.identity = state.zoomed;
+  localStorage.setItem(STORAGE_IDENTITY, String(state.identity.nr));
+  connectSignaling();
+  goHome();
+});
+
+ui.btnCall.addEventListener("click", () => {
+  if (state.zoomed) startCall(state.zoomed);
+});
+
+ui.btnCallHost.addEventListener("click", () => {
+  const host = hostPerson();
+  if (host) startCall(host);
+});
+
+ui.stage.addEventListener("click", onStageBackground);
+
+window.addEventListener("resize", () => {
+  if (!ui.photo.hidden) applyStageLayout();
+});
+
+let pressTimer = null;
+ui.wordmark.addEventListener("pointerdown", () => {
+  pressTimer = setTimeout(() => show(ui.resetSheet, true), 5000);
+});
+for (const ev of ["pointerup", "pointerleave", "pointercancel"]) {
+  ui.wordmark.addEventListener(ev, () => {
+    if (pressTimer) clearTimeout(pressTimer);
+    pressTimer = null;
+  });
+}
+ui.btnResetCancel.addEventListener("click", () => show(ui.resetSheet, false));
+ui.btnReset.addEventListener("click", async () => {
+  await fullReset();
+});
+
+async function fullReset() {
+  stopRingtone();
+  hangup(false);
+  state.signaling.close();
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    const sub = await reg?.pushManager?.getSubscription();
+    if (sub) {
+      await postUnsubscribe(state.code, { endpoint: sub.endpoint, deviceId: getDeviceId() });
+      await sub.unsubscribe();
+    } else if (state.code) {
+      await postUnsubscribe(state.code, { deviceId: getDeviceId() });
+    }
+  } catch {
+    /* ignore */
+  }
+  localStorage.removeItem(STORAGE_CODE);
+  localStorage.removeItem(STORAGE_IDENTITY);
+  localStorage.removeItem(STORAGE_DEVICE);
+  await clearMediaCache();
+  revokeMedia();
+  location.reload();
+}
+
+function connectSignaling() {
+  if (!state.identity) return;
+  state.signaling.connect(state.code, state.identity.nr, getDeviceId());
+  state.signaling.on("call", onRemoteCall);
+  state.signaling.on("offer", onRemoteCall);
+  state.signaling.on("answer", onRemoteAnswer);
+  state.signaling.on("ice", onRemoteIce);
+  state.signaling.on("hangup", () => hangup(true));
+  state.signaling.on("reject", () => hangup(true));
+  state.signaling.on("taken", onCallTakenElsewhere);
+}
+
+function onCallTakenElsewhere() {
+  if (state.outgoing || state.pc) return;
+  stopRingtone();
+  state.pendingFrom = null;
+  state.pendingFromDevice = null;
+  state.pendingOffer = null;
+  show(ui.incoming, false);
+  goHome();
+  show(ui.takenToast, true);
+  setTimeout(() => show(ui.takenToast, false), 2400);
+}
+
+function peerHandlers(peerNr) {
+  return {
+    onIce: (candidate) =>
+      state.signaling.send({
+        type: "ice",
+        to: peerNr,
+        toDevice: state.peerDevice,
+        fromDevice: getDeviceId(),
+        candidate,
+      }),
+    onTrack: (stream) => {
+      state.remoteStream = stream;
+      ui.remoteVideo.srcObject = stream;
+      ui.remoteVideo.play().catch(() => {});
+    },
+    onState: (s) => {
+      if (s === "connected") ui.callStatus.textContent = "";
+      if (s === "failed" || s === "disconnected") {
+        ui.callStatus.textContent = "Verbindung unterbrochen";
+      }
+    },
+  };
+}
+
+async function startCall(person) {
+  if (!state.identity || !person) return;
+  if (isHostPerson(state.identity, state.config)) {
+    if (!person.callable || isHostPerson(person, state.config)) return;
+  } else if (!isHostPerson(person, state.config)) {
+    return; // receivers only call the host
+  }
+  hangup(false);
+  state.inCallWith = person;
+  state.outgoing = true;
+  state.callId = (crypto.randomUUID && crypto.randomUUID()) || `c-${Date.now()}`;
+  state.peerDevice = null;
+  showScreen("call");
+  ui.callStatus.textContent = `Warten auf ${person.name}…`;
+  try {
+    state.localStream = await getLocalStream();
+    ui.localVideo.srcObject = state.localStream;
+    state.pc = createPeer(state.config.iceServers, state.localStream, peerHandlers(person.nr));
+    const offer = await state.pc.createOffer();
+    await state.pc.setLocalDescription(offer);
+    state.signaling.send({
+      type: "call",
+      to: person.nr,
+      fromDevice: getDeviceId(),
+      fromName: state.identity.name,
+      callId: state.callId,
+      sdp: state.pc.localDescription,
+    });
+  } catch {
+    ui.callStatus.textContent = "Kamera oder Mikrofon nicht verfügbar";
+  }
+}
+
+function onRemoteCall(data) {
+  if (state.inCallWith && !state.outgoing) return;
+  const from = personByNr(data.from);
+  state.pendingOffer = data.sdp;
+  state.pendingFrom = from;
+  state.pendingFromDevice = data.fromDevice || null;
+  ui.incomingTitle.textContent = `${from?.name || "Jemand"} ruft an`;
+  show(ui.zoomCard, false);
+  showScreen("incoming");
+  applyStageLayout();
+  if (from) {
+    state.zoomed = from;
+    applyZoom(from);
+  }
+  startRingtone();
+}
+
+async function onRemoteAnswer(data) {
+  if (!state.pc || !data.sdp) return;
+  await state.pc.setRemoteDescription(data.sdp);
+  await flushIce(state.pc);
+}
+
+async function onRemoteIce(data) {
+  if (state.pc && data.candidate) await addIce(state.pc, data.candidate);
+}
+
+ui.btnAccept.addEventListener("click", async () => {
+  stopRingtone();
+  const from = state.pendingFrom;
+  const offer = state.pendingOffer;
+  if (!from || !offer) return;
+  state.inCallWith = from;
+  state.outgoing = false;
+  showScreen("call");
+  ui.callStatus.textContent = "Verbinden…";
+  try {
+    state.localStream = await getLocalStream();
+    ui.localVideo.srcObject = state.localStream;
+    state.pc = createPeer(state.config.iceServers, state.localStream, peerHandlers(from.nr));
+    await state.pc.setRemoteDescription(offer);
+    await flushIce(state.pc);
+    const answer = await state.pc.createAnswer();
+    await state.pc.setLocalDescription(answer);
+    state.signaling.send({
+      type: "answer",
+      to: from.nr,
+      toDevice: state.pendingFromDevice,
+      fromDevice: getDeviceId(),
+      sdp: state.pc.localDescription,
+    });
+    state.peerDevice = state.pendingFromDevice;
+  } catch {
+    ui.callStatus.textContent = "Kamera oder Mikrofon nicht verfügbar";
+  }
+});
+
+ui.btnDecline.addEventListener("click", () => {
+  stopRingtone();
+  if (state.pendingFrom) {
+    state.signaling.send({ type: "reject", to: state.pendingFrom.nr });
+  }
+  state.pendingFrom = null;
+  state.pendingOffer = null;
+  goHome();
+});
+
+ui.btnHangup.addEventListener("click", () => hangup(false));
+
+function hangup(remote) {
+  stopRingtone();
+  if (!remote && state.inCallWith) {
+    state.signaling.send({ type: "hangup", to: state.inCallWith.nr, fromDevice: getDeviceId() });
+  }
+  closePeer(state.pc);
+  state.pc = null;
+  stopStream(state.localStream);
+  state.localStream = null;
+  state.remoteStream = null;
+  ui.localVideo.srcObject = null;
+  ui.remoteVideo.srcObject = null;
+  state.inCallWith = null;
+  state.outgoing = false;
+  state.pendingFrom = null;
+  state.pendingFromDevice = null;
+  state.pendingOffer = null;
+  state.peerDevice = null;
+  state.callId = null;
+  if (state.identity && state.config) goHome();
+}
+
+ui.btnNotify.addEventListener("click", async () => {
+  // Permission + subscribe only inside this tap handler (iOS requirement).
+  try {
+    if (!("Notification" in window) || !navigator.serviceWorker) return;
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") return;
+    const reg = await navigator.serviceWorker.ready;
+    const vapid = state.config?.vapidPublicKey;
+    if (!vapid) return;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapid),
+    });
+    await postSubscribe(state.code, state.identity.nr, sub.toJSON(), getDeviceId());
+    show(ui.btnNotify, false);
+  } catch {
+    /* push may be unavailable locally */
+  }
+});
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {});
+  navigator.serviceWorker.addEventListener("message", (ev) => {
+    if (ev.data?.type === "incoming" && ev.data.data?.from) {
+      // If we already have a live call offer, the UI is showing; otherwise just hint.
+    }
+  });
+}
+
+if (ui.btnDisconnect) {
+  ui.btnDisconnect.addEventListener("click", () => {
+    const name = state.identity?.name || "dir";
+    ui.disconnectCopy.textContent =
+      `Dieses Gerät von ${name} trennen? Du bekommst dann keine Anrufe von Hanna mehr auf diesem Gerät.`;
+    show(ui.disconnectSheet, true);
+  });
+}
+ui.btnDisconnectCancel?.addEventListener("click", () => show(ui.disconnectSheet, false));
+ui.btnDisconnectConfirm?.addEventListener("click", () => disconnectThisDevice());
+
+async function disconnectThisDevice() {
+  const code = state.code;
+  const deviceId = getDeviceId();
+  stopRingtone();
+  hangup(false);
+  state.signaling.close();
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    const sub = await reg?.pushManager?.getSubscription();
+    await postUnsubscribe(code, { endpoint: sub?.endpoint, deviceId });
+    if (sub) await sub.unsubscribe();
+  } catch {
+    /* ignore */
+  }
+  localStorage.removeItem(STORAGE_IDENTITY);
+  state.identity = null;
+  state.mode = "setup";
+  show(ui.disconnectSheet, false);
+  goHome();
+}
+
+(function bindPhotoGestures() {
+  const pointers = new Map();
+  let lastDist = 0;
+
+  function active() {
+    return !state.zoomed && !!state.layout?.contain;
+  }
+
+  ui.stage.addEventListener("pointerdown", (ev) => {
+    if (!active()) return;
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    state.gestureMoved = false;
+    ui.stack.style.transition = "none";
+    if (pointers.size === 2) {
+      const pts = [...pointers.values()];
+      lastDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    }
+    try { ui.stage.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
+  });
+
+  ui.stage.addEventListener("pointermove", (ev) => {
+    if (!pointers.has(ev.pointerId)) return;
+    const prev = pointers.get(ev.pointerId);
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (!active()) return;
+    if (pointers.size === 2) {
+      const pts = [...pointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (lastDist > 0 && dist > 0) {
+        const midX = (pts[0].x + pts[1].x) / 2;
+        const midY = (pts[0].y + pts[1].y) / 2;
+        zoomAtPoint(midX, midY, dist / lastDist);
+        state.gestureMoved = true;
+      }
+      lastDist = dist;
+      ev.preventDefault();
+      return;
+    }
+    const dx = ev.clientX - prev.x;
+    const dy = ev.clientY - prev.y;
+    if (Math.hypot(dx, dy) > 6) state.gestureMoved = true;
+    if ((state.nav.s || 1) > 1.01) {
+      state.nav.x += dx;
+      state.nav.y += dy;
+      clampNav();
+      applyNavTransform();
+    }
+  });
+
+  const endPtr = (ev) => {
+    pointers.delete(ev.pointerId);
+    lastDist = 0;
+  };
+  ui.stage.addEventListener("pointerup", endPtr);
+  ui.stage.addEventListener("pointercancel", endPtr);
+
+  ui.stage.addEventListener(
+    "wheel",
+    (ev) => {
+      if (!active()) return;
+      ev.preventDefault();
+      ui.stack.style.transition = "none";
+      zoomAtPoint(ev.clientX, ev.clientY, ev.deltaY < 0 ? 1.08 : 1 / 1.08);
+    },
+    { passive: false }
+  );
+})();
+
+tryStoredCode();

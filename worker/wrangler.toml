@@ -1,0 +1,27 @@
+name = "hannafon"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+account_id = "7ec1ece6c2c7b15fb39e8fab130d58f0"
+workers_dev = true
+
+# Private media lives in this directory locally (copied from ../../private,
+# gitignored). In production, deploy the same way or swap for an R2 binding.
+# run_worker_first ensures nothing is listed or served without a family code.
+[assets]
+directory = "./private-media"
+binding = "ASSETS"
+run_worker_first = true
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "HannafonRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["HannafonRoom"]
+
+
+# Public, non-secret production settings. Local `wrangler dev` still prefers .dev.vars.
+[vars]
+ALLOWED_ORIGINS = "https://muellkuebel.github.io"
+VAPID_SUBJECT = "mailto:hannafon-local@localhost"
