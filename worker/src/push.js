@@ -53,7 +53,7 @@ async function createVapidJwt(env, audience) {
   const header = bytesToB64url(textBytes(JSON.stringify({ typ: "JWT", alg: "ES256" })));
   const exp = Math.floor(Date.now() / 1000) + 12 * 3600;
   const claims = bytesToB64url(
-    textBytes(JSON.stringify({ aud: audience, exp, sub: env.VAPID_SUBJECT || "mailto:hannafon-local@localhost" }))
+    textBytes(JSON.stringify({ aud: audience, exp, sub: env.VAPID_SUBJECT || "mailto:muellkuebel@me.com" }))
   );
   const data = textBytes(`${header}.${claims}`);
   const sigDer = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, priv, data));
@@ -167,5 +167,11 @@ export async function sendWebPush(env, subscription, payloadObj) {
     },
     body,
   });
-  return res;
+  const text = await res.text().catch(() => "");
+  let host = "";
+  try { host = new URL(endpoint).host; } catch { host = "unknown"; }
+  const info = { host, status: res.status, ok: res.ok, ttl: 60, urgency: "high" };
+  if (!res.ok) info.body = String(text).slice(0, 180);
+  console.log("hannafon push", JSON.stringify(info));
+  return { ok: res.ok, status: res.status, host, text };
 }

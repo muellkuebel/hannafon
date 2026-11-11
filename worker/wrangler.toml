@@ -24,4 +24,4 @@ new_sqlite_classes = ["HannafonRoom"]
 # Public, non-secret production settings. Local `wrangler dev` still prefers .dev.vars.
 [vars]
 ALLOWED_ORIGINS = "https://muellkuebel.github.io"
-VAPID_SUBJECT = "mailto:hannafon-local@localhost"
+VAPID_SUBJECT = "mailto:muellkuebel@me.com"

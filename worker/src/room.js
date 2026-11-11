@@ -112,6 +112,16 @@ export class HannafonRoom {
       return Response.json({ ok: true });
     }
 
+    if (url.pathname === "/push-status" && request.method === "GET") {
+      return Response.json(this.pushStatus());
+    }
+
+    if (url.pathname === "/push-test" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const result = await this.sendTestPush(body);
+      return Response.json(result, { status: result.ok ? 200 : 502 });
+    }
+
     return new Response("not found", { status: 404 });
   }
 
@@ -240,21 +250,94 @@ export class HannafonRoom {
     const payload = {
       title: "Hannafon",
       body,
-      data: { url: `./?incoming=${from}`, from, fromName },
+      data: { url: `/hannafon/?incoming=${from}`, from, fromName },
     };
     const stale = [];
+    const results = [];
     for (const row of queue) {
       try {
         const sub = JSON.parse(row.subscription);
         const res = await sendWebPush(this.env, sub, payload);
+        results.push({ host: res.host, status: res.status, ok: res.ok });
         if (res.status === 404 || res.status === 410) stale.push(row.endpoint);
+      } catch (err) {
+        results.push({ ok: false, error: "send_failed" });
+        console.log("hannafon push exception", String(err && err.message ? err.message : err).slice(0, 180));
+      }
+    }
+    console.log("hannafon push batch", JSON.stringify({ to, from, count: queue.length, results }));
+    for (const endpoint of stale) {
+      this.ctx.storage.sql.exec(`DELETE FROM pushes WHERE endpoint = ?`, endpoint);
+      this.ctx.storage.sql.exec(`DELETE FROM devices WHERE endpoint = ?`, endpoint);
+    }
+    return { ok: true, count: queue.length, results };
+  }
+
+  pushStatus() {
+    const devices = [];
+    for (const row of this.ctx.storage.sql.exec(
+      `SELECT device_id, person_nr, endpoint, subscription, created FROM devices`
+    )) {
+      let host = "";
+      let hasKeys = false;
+      try {
+        if (row.endpoint) host = new URL(row.endpoint).host;
+        const sub = row.subscription ? JSON.parse(row.subscription) : null;
+        hasKeys = !!(sub && sub.keys && sub.keys.p256dh && sub.keys.auth);
       } catch {
-        /* ignore individual push failures */
+        /* ignore */
+      }
+      devices.push({
+        personNr: row.person_nr,
+        hasDeviceId: !!row.device_id,
+        endpointHost: host,
+        hasKeys,
+        created: row.created,
+      });
+    }
+    return { ok: true, count: devices.length, devices };
+  }
+
+  async sendTestPush(body = {}) {
+    const deviceId = body.deviceId ? String(body.deviceId) : "";
+    const personNr = Number(body.personNr || 0);
+    const rows = [];
+    if (deviceId) {
+      for (const row of this.ctx.storage.sql.exec(
+        `SELECT endpoint, subscription, person_nr FROM devices WHERE device_id = ?`,
+        deviceId
+      )) rows.push(row);
+    } else if (personNr) {
+      for (const row of this.ctx.storage.sql.exec(
+        `SELECT endpoint, subscription, person_nr FROM devices WHERE person_nr = ? AND subscription IS NOT NULL`,
+        personNr
+      )) rows.push(row);
+    }
+    if (!rows.length) return { ok: false, error: "no_subscription", sent: 0 };
+    const payload = {
+      title: "Hannafon",
+      body: "Test-Mitteilung · so siehst du, wenn Hanna anruft",
+      data: { url: "/hannafon/", test: true },
+    };
+    const results = [];
+    const stale = [];
+    for (const row of rows) {
+      try {
+        const sub = JSON.parse(row.subscription);
+        const res = await sendWebPush(this.env, sub, payload);
+        results.push({ host: res.host, status: res.status, ok: res.ok });
+        if (res.status === 404 || res.status === 410) stale.push(row.endpoint);
+      } catch (err) {
+        results.push({ ok: false, error: "send_failed" });
+        console.log("hannafon push exception", String(err && err.message ? err.message : err).slice(0, 180));
       }
     }
     for (const endpoint of stale) {
       this.ctx.storage.sql.exec(`DELETE FROM pushes WHERE endpoint = ?`, endpoint);
       this.ctx.storage.sql.exec(`DELETE FROM devices WHERE endpoint = ?`, endpoint);
     }
+    const ok = results.some((r) => r.ok);
+    console.log("hannafon push test", JSON.stringify({ sent: results.length, results }));
+    return { ok, sent: results.length, results };
   }
 }

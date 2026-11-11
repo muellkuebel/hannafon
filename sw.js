@@ -1,5 +1,5 @@
-const VERSION = "V1.02";
-const CACHE = "hannafon-v1.02";
+const VERSION = "V1.03";
+const CACHE = "hannafon-v1.03";
 const SHELL = [
   "./",
   "./index.html",
@@ -48,36 +48,46 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let data = {};
-  try {
-    data = event.data ? event.data.json() : {};
-  } catch {
-    data = { body: event.data ? event.data.text() : "" };
-  }
-  const title = data.title || "Hannafon";
-  const body = data.body || "Eingehender Anruf";
-  const extra = data.data || { url: "./" };
-  event.waitUntil(
-    self.registration.showNotification(title, {
+  event.waitUntil((async () => {
+    let data = {};
+    try {
+      data = event.data ? event.data.json() : {};
+    } catch {
+      try {
+        data = { body: event.data ? event.data.text() : "" };
+      } catch {
+        data = {};
+      }
+    }
+    const title = data.title || "Hannafon";
+    const body = data.body || "Eingehender Anruf";
+    const extra = data.data || {};
+    if (!extra.url) extra.url = "/hannafon/";
+    await self.registration.showNotification(title, {
       body,
       icon: "./icons/icon-192.png",
       badge: "./icons/icon-192.png",
       data: extra,
+      lang: "de",
       requireInteraction: true,
-    })
-  );
+    });
+  })());
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
-  const target = data.url || "./";
+  const target = data.url || "/hannafon/";
   event.waitUntil(
     (async () => {
       const all = await clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of all) {
-        if ("focus" in client) {
-          client.postMessage({ type: "incoming", data });
+        const href = client.url || "";
+        if (href.includes("/hannafon") && "focus" in client) {
+          try { client.postMessage({ type: "incoming", data }); } catch { /* ignore */ }
+          if ("navigate" in client) {
+            try { await client.navigate(target); } catch { /* ignore */ }
+          }
           return client.focus();
         }
       }

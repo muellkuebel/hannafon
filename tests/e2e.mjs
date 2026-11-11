@@ -175,6 +175,48 @@ async function unzoom(page) {
   }
 }
 
+
+async function waitPhotoReady(page) {
+  await page.waitForFunction(() => window.__hannafonTest && window.__hannafonTest.ready(), { timeout: 20000 });
+}
+
+async function tapFaceCenter(page, nr) {
+  await waitPhotoReady(page);
+  const pt = await page.evaluate((n) => {
+    const hook = window.__hannafonTest;
+    return hook.ensureFaceVisible ? hook.ensureFaceVisible(n) : hook.facePoint(n);
+  }, nr);
+  if (!pt) throw new Error("no face point for #" + nr);
+  if (pt.onScreen === false) throw new Error("face #" + nr + " is off-screen after pan");
+  await page.mouse.click(pt.x, pt.y);
+}
+
+function callablePeople() {
+  return loadPeople().filter((p) => p.tappable !== false);
+}
+
+async function assertFaceCenters(page, label) {
+  await waitPhotoReady(page);
+  for (const p of callablePeople()) {
+    await tapFaceCenter(page, p.nr);
+    await page.locator("#zoom-card").waitFor({ state: "visible", timeout: 8000 });
+    const name = (await page.locator("#zoom-name").innerText()).trim();
+    if (name !== p.name) {
+      throw new Error(`${label} face-center #${p.nr}: expected "${p.name}", got "${name}"`);
+    }
+    await unzoom(page);
+  }
+}
+
+async function assertCoverage(page, label) {
+  await waitPhotoReady(page);
+  await page.waitForTimeout(400);
+  const cov = await page.evaluate(() => window.__hannafonTest.photoCoverage());
+  if (!cov || !cov.covers) {
+    throw new Error(`${label} photo does not cover the stage: ${JSON.stringify(cov)}`);
+  }
+}
+
 async function zoomTo(page, nr, expectedName) {
   await tapPerson(page, nr);
   await page.locator("#zoom-card").waitFor({ state: "visible", timeout: 8000 });
@@ -234,6 +276,10 @@ async function walkReceiverShots(page, tag) {
   await page.locator("#screen-standby").waitFor({ state: "visible", timeout: 8000 });
   await page.locator("#btn-call-host").waitFor({ state: "visible" });
   await page.locator("#btn-disconnect").waitFor({ state: "visible" });
+  const iconSrc = (await page.locator("#host-face").getAttribute("src")) || "";
+  if (!iconSrc.includes("icon-512")) {
+    throw new Error("standby host tile should use the app icon, got " + iconSrc);
+  }
   await page.waitForTimeout(400);
   await shot(page, `${tag}-standby.jpg`);
 }
@@ -338,6 +384,10 @@ async function run() {
 
     await daniel.locator("#screen-incoming").waitFor({ state: "visible", timeout: 15000 });
     await danielB.locator("#screen-incoming").waitFor({ state: "visible", timeout: 15000 });
+    const ringState = await daniel.evaluate(() => window.__hannafonTest.audioState());
+    if (ringState !== "running") {
+      throw new Error("ringtone AudioContext should be running after a prior tap, got " + ringState);
+    }
     await daniel.waitForTimeout(800);
     await shot(daniel, "daniel-incoming.jpg");
     await shot(daniel, "incoming-hanna.jpg");
@@ -403,10 +453,112 @@ async function run() {
     await confirmDisconnect(danielSE);
     results.push("iphone 375x667 receiver screens");
 
+    // Face-center hit testing on iPhone 393×852 and 375×667, after render and after pan/pinch.
+    await assertFaceCenters(daniel, "iphone14 initial");
+    await daniel.evaluate(() => window.__hannafonTest.pinchPan(-48, 36, 1.55));
+    await daniel.waitForTimeout(200);
+    await assertFaceCenters(daniel, "iphone14 after pan/pinch");
+    await daniel.evaluate(() => window.__hannafonTest.resetNav());
+    results.push("iphone 393x852 face-center hits");
+
+    await assertFaceCenters(danielSE, "iphoneSE initial");
+    await danielSE.evaluate(() => window.__hannafonTest.pinchPan(-40, 28, 1.45));
+    await danielSE.waitForTimeout(200);
+    await assertFaceCenters(danielSE, "iphoneSE after pan/pinch");
+    await danielSE.evaluate(() => window.__hannafonTest.resetNav());
+    results.push("iphone 375x667 face-center hits");
+
+    // Zoomed: a tap outside the selected silhouette zooms out, it does not pick a neighbor.
+    await waitPhotoReady(hanna);
+    await unzoom(hanna).catch(() => {});
+    await tapFaceCenter(hanna, 22);
+    await hanna.locator("#zoom-name").waitFor({ state: "visible", timeout: 8000 });
+    if ((await hanna.locator("#zoom-name").innerText()).trim() !== "Daniel") {
+      throw new Error("expected Daniel zoomed before outside-tap test");
+    }
+    await tapFaceCenter(hanna, 23);
+    await hanna.waitForFunction(() => !document.getElementById("photo-stage")?.classList.contains("is-zoomed"), {
+      timeout: 5000,
+    });
+    if (await hanna.locator("#zoom-card").isVisible().catch(() => false)) {
+      const got = (await hanna.locator("#zoom-name").innerText()).trim();
+      throw new Error("tap on a neighbor while zoomed should zoom out, got " + got);
+    }
+    await tapFaceCenter(hanna, 22);
+    await hanna.locator("#btn-call").waitFor({ state: "visible", timeout: 8000 });
+    const stillDaniel = (await hanna.locator("#zoom-name").innerText()).trim();
+    if (stillDaniel !== "Daniel") throw new Error("selected person should stay interactive");
+    await unzoom(hanna);
+    results.push("zoomed outside tap unzooms");
+
+    // iPad orientation: photo must refit after portrait and back, and hits stay correct.
+    async function cyclePad(page, land, port, tag) {
+      await page.setViewportSize(land);
+      await page.evaluate(() => window.__hannafonTest.resetNav());
+      await assertCoverage(page, tag + " landscape-1");
+      await tapFaceCenter(page, 22);
+      await page.locator("#zoom-name").waitFor({ state: "visible", timeout: 8000 });
+      if ((await page.locator("#zoom-name").innerText()).trim() !== "Daniel") {
+        throw new Error(tag + " landscape Daniel miss");
+      }
+      await unzoom(page);
+      await page.setViewportSize(port);
+      await page.waitForTimeout(400);
+      await assertCoverage(page, tag + " portrait");
+      await tapFaceCenter(page, 23);
+      await page.locator("#zoom-name").waitFor({ state: "visible", timeout: 8000 });
+      if ((await page.locator("#zoom-name").innerText()).trim() !== "Melanie") {
+        throw new Error(tag + " portrait Melanie miss");
+      }
+      await unzoom(page);
+      await page.setViewportSize(land);
+      await page.waitForTimeout(400);
+      await assertCoverage(page, tag + " landscape-2");
+      await tapFaceCenter(page, 22);
+      await page.locator("#zoom-name").waitFor({ state: "visible", timeout: 8000 });
+      if ((await page.locator("#zoom-name").innerText()).trim() !== "Daniel") {
+        throw new Error(tag + " rotated-back Daniel miss");
+      }
+      await unzoom(page);
+    }
+
+    await cyclePad(hanna, { width: 1180, height: 820 }, { width: 820, height: 1180 }, "ipad-10");
+    results.push("ipad 1180 orientation");
+
+    const miniCtx = await browser.newContext({
+      viewport: { width: 1133, height: 744 },
+      deviceScaleFactor: 2,
+      isMobile: true,
+      hasTouch: true,
+      permissions: ["camera", "microphone", "notifications"],
+    });
+    await miniCtx.grantPermissions(["camera", "microphone", "notifications"], { origin: ORIGIN });
+    const mini = await miniCtx.newPage();
+    await enterCode(mini);
+    await mini.locator("#setup-title").waitFor({ state: "visible", timeout: 20000 });
+    await waitPhotoReady(mini);
+    await cyclePad(mini, { width: 1133, height: 744 }, { width: 744, height: 1133 }, "ipad-mini");
+    await mini.close();
+    await miniCtx.close();
+    results.push("ipad mini 1133 orientation");
+
+    // Shared AudioContext is running when ringing after one prior tap.
+    await hanna.mouse.click(24, 24);
+    await hanna.evaluate(async () => {
+      await window.__hannafonTest.unlockAudio();
+      await window.__hannafonTest.startRingtone();
+    });
+    const audioState = await hanna.evaluate(() => window.__hannafonTest.audioState());
+    if (audioState !== "running") {
+      throw new Error("AudioContext should be running when ringing after a tap, got " + audioState);
+    }
+    await hanna.evaluate(() => window.__hannafonTest.stopRingtone());
+    results.push("ringtone context running after tap");
+
     // Structural push endpoint (no delivery assertion locally)
     const health = await fetch(HEALTH).then((r) => r.json());
-    if (!health.ok || health.version !== "V1.02") throw new Error("health/version");
-    results.push("worker health V1.02");
+    if (!health.ok || health.version !== "V1.03") throw new Error("health/version");
+    results.push("worker health V1.03");
 
     console.log("E2E OK:", results.join(", "));
     console.log("screenshots:", fs.readdirSync(shots).join(", "));

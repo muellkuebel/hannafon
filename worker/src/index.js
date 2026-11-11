@@ -1,9 +1,7 @@
 import { HannafonRoom } from "./room.js";
-import { sendWebPush } from "./push.js";
-
 export { HannafonRoom };
 
-const VERSION = "V1.02";
+const VERSION = "V1.03";
 
 function normalizeCode(code) {
   return String(code || "")
@@ -192,24 +190,33 @@ export default {
         return Response.json(json, { status: res.status, headers });
       }
 
+      if (url.pathname === "/api/push-status" && request.method === "GET") {
+        const stub = roomStub(env);
+        const res = await stub.fetch("https://room/push-status", { method: "GET" });
+        const json = await res.json();
+        return Response.json(json, { status: res.status, headers });
+      }
+
       if (url.pathname === "/api/push-test" && request.method === "POST") {
-        // Structural / local test helper: encrypt and (attempt to) send one payload.
-        const body = await request.json();
-        if (!body.subscription) {
-          return Response.json({ ok: false, error: "subscription required" }, { status: 400, headers });
-        }
-        const res = await sendWebPush(thisEnv(env), body.subscription, {
-          title: "Hannafon",
-          body: body.body || "Hanna ruft an",
-          data: { url: "./?incoming=10" },
+        const body = await request.json().catch(() => ({}));
+        const stub = roomStub(env);
+        const res = await stub.fetch("https://room/push-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId: body.deviceId, personNr: body.personNr }),
         });
-        return Response.json({ ok: res.ok, status: res.status }, { headers });
+        const json = await res.json();
+        return Response.json(json, { status: res.status, headers });
       }
 
       if (url.pathname === "/api/ws") {
         const person = url.searchParams.get("person") || "";
+        const device = url.searchParams.get("device") || "";
         const stub = roomStub(env);
-        return stub.fetch(`https://room/ws?person=${encodeURIComponent(person)}`, request);
+        const u = new URL("https://room/ws");
+        u.searchParams.set("person", person);
+        if (device) u.searchParams.set("device", device);
+        return stub.fetch(u.toString(), request);
       }
 
       return new Response("not found", { status: 404, headers });
@@ -218,10 +225,6 @@ export default {
     }
   },
 };
-
-function thisEnv(env) {
-  return env;
-}
 
 function guessType(key) {
   if (key.endsWith(".webp")) return "image/webp";

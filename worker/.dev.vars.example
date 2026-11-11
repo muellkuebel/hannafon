@@ -5,7 +5,7 @@
 FAMILY_CODE_HASH=
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
-VAPID_SUBJECT=mailto:hannafon-local@localhost
+VAPID_SUBJECT=mailto:muellkuebel@me.com
 LOCAL_MEDIA_ORIGIN=http://127.0.0.1:4174
 ALLOWED_ORIGINS=http://127.0.0.1:4173,http://localhost:4173
 # Optional TURN, e.g. Cloudflare Calls:

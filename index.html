@@ -7,7 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Hannafon">
-  <meta name="theme-color" content="#2F2118">
+  <meta name="theme-color" content="#000000">
   <title>Hannafon</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <audio id="unlock-audio" playsinline webkit-playsinline preload="auto" hidden></audio>
   <div id="app">
     <header class="topbar">
       <button type="button" id="wordmark" class="wordmark" aria-label="Hannafon">Hannafon</button>
@@ -72,8 +73,8 @@
           <p id="standby-note" class="standby-note"></p>
         </div>
         <div class="standby-cta">
-          <div id="host-face-wrap" class="host-portrait" hidden>
-            <img id="host-face" alt="">
+          <div id="host-face-wrap" class="host-portrait app-icon-tile" hidden>
+            <img id="host-face" alt="Hannafon" src="./icons/icon-512.png">
           </div>
           <button type="button" id="btn-call-host" class="pill pill-green pill-xl">
           <span id="btn-call-host-label">Anrufen</span>
@@ -83,7 +84,9 @@
         <div id="install-hint" class="hint hidden" hidden>
           Bitte diese Seite zum Home-Bildschirm hinzufügen, damit Anrufe auch als Mitteilung ankommen.
         </div>
+        <p id="push-status" class="push-status"></p>
         <button type="button" id="btn-notify" class="btn-text hidden" hidden>Mitteilungen erlauben</button>
+        <button type="button" id="btn-push-test" class="btn-text hidden" hidden>Test-Mitteilung senden</button>
         <button type="button" id="btn-disconnect" class="btn-disconnect hidden" hidden>Dieses Gerät trennen</button>
       </div>
     </section>
@@ -91,6 +94,7 @@
     <section id="screen-incoming" class="screen hidden" hidden>
       <div class="panel incoming-panel">
         <p id="incoming-title" class="incoming-title"></p>
+        <p id="ring-hint" class="ring-hint hidden" hidden>Tippen zum Annehmen</p>
         <div class="incoming-actions">
           <button type="button" id="btn-decline" class="pill pill-red">
             <span>Ablehnen</span>
@@ -122,7 +126,7 @@
     <div id="taken-toast" class="taken-toast hidden" hidden>Anderswo angenommen</div>
 
     <div id="reset-sheet" class="reset-sheet hidden" hidden>
-      <p class="version">Hannafon V1.02</p>
+      <p class="version">Hannafon V1.03</p>
       <button type="button" id="btn-reset" class="pill pill-ink">Alles zurücksetzen</button>
       <button type="button" id="btn-reset-cancel" class="btn-text">Abbrechen</button>
     </div>

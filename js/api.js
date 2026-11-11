@@ -76,3 +76,18 @@ export function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
   return out;
 }
+
+export async function postPushTest(code, { deviceId, personNr } = {}) {
+  const res = await fetch(`${apiOrigin()}/api/push-test`, {
+    method: "POST",
+    headers: codeHeaders(code),
+    body: JSON.stringify({ deviceId, personNr }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok && data.ok, status: res.status, data };
+}
+
+export async function getPushStatus(code) {
+  const res = await fetch(`${apiOrigin()}/api/push-status`, { headers: codeHeaders(code, false) });
+  return res.json().catch(() => ({ ok: false }));
+}
