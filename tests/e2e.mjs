@@ -239,6 +239,144 @@ async function zoomTo(page, nr, expectedName) {
 
 const ORIGIN = "http://127.0.0.1:4173";
 
+const CREAM_RGB = "rgb(246, 239, 227)";
+
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || "").trim());
+  return m ? `rgb(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)})` : null;
+}
+
+// V1.05: no dark gradient on the photo; status bar colour and page edge follow the photo.
+async function assertTopClean(page, label) {
+  if ((await page.locator("#topfade, .topfade").count()) !== 0) {
+    throw new Error(label + ": .topfade gradient must be gone");
+  }
+  const info = await page.evaluate(() => {
+    const edge = window.__hannafonTest.edgeColors();
+    const meta = document.querySelector('meta[name="theme-color"]')?.getAttribute("content");
+    const status = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')?.getAttribute("content");
+    const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
+    // Nothing semi-transparent and dark may sit over the top 160px of the photo.
+    const stage = document.getElementById("photo-stage").getBoundingClientRect();
+    const overlays = [];
+    for (const el of document.querySelectorAll("#screen-photo > *:not(#photo-stage)")) {
+      const cs = getComputedStyle(el);
+      if (cs.display === "none" || Number(cs.opacity) === 0) continue;
+      const r = el.getBoundingClientRect();
+      if (r.top > stage.top + 160 || r.width < stage.width * 0.5) continue;
+      if (cs.backgroundImage !== "none" || (cs.backgroundColor !== "rgba(0, 0, 0, 0)" && cs.backgroundColor !== "transparent")) {
+        overlays.push(el.id || el.className);
+      }
+    }
+    return { edge, meta, status, htmlBg, overlays };
+  });
+  if (info.status !== "default") throw new Error(label + ": status bar style must be default, got " + info.status);
+  if (info.overlays.length) throw new Error(label + ": overlay over top of photo: " + info.overlays.join(","));
+  if (!info.edge.top || info.meta !== info.edge.top) {
+    throw new Error(label + ": theme-color should follow the photo top edge " + JSON.stringify(info));
+  }
+  if (hexToRgb(info.edge.top) === CREAM_RGB) throw new Error(label + ": theme-color still cream on the photo");
+  if (info.htmlBg !== hexToRgb(info.edge.bottom) || info.htmlBg === CREAM_RGB) {
+    throw new Error(label + ": html background should be the photo bottom edge colour " + JSON.stringify(info));
+  }
+}
+
+// Landscape iPad: photo covers the whole (possibly iOS-gap-extended) app, and every
+// tappable head is hittable at the default fit, without panning, and clear of the chrome.
+async function assertLandscapeFullBleed(page, viewport, tag, sim) {
+  await page.setViewportSize(viewport);
+  await page.evaluate((sim) => {
+    if (sim) window.__HANNAFON_VIEWPORT_TEST__ = sim;
+    else delete window.__HANNAFON_VIEWPORT_TEST__;
+  }, sim || null);
+  await page.waitForTimeout(450);
+  const gap = await page.evaluate(() => window.__hannafonTest.updateViewportFix());
+  await page.evaluate(() => window.__hannafonTest.resetNav());
+  await page.waitForTimeout(150);
+  const expectGap = sim?.expectGap || 0;
+  if (gap !== expectGap) throw new Error(`${tag}: iOS gap ${gap}, expected ${expectGap}`);
+  const geo = await page.evaluate(() => {
+    const app = document.getElementById("app").getBoundingClientRect();
+    const stage = document.getElementById("photo-stage").getBoundingClientRect();
+    return {
+      innerH: window.innerHeight,
+      innerW: window.innerWidth,
+      app: { top: app.top, bottom: app.bottom, w: app.width },
+      stage: { top: stage.top, bottom: stage.bottom, left: stage.left, right: stage.right },
+      cov: window.__hannafonTest.photoCoverage(),
+    };
+  });
+  const wantBottom = geo.innerH + expectGap;
+  if (Math.abs(geo.app.bottom - wantBottom) > 1 || Math.abs(geo.stage.bottom - wantBottom) > 1 || geo.stage.top > 0.5) {
+    throw new Error(`${tag}: app/stage must reach the bottom (${wantBottom}): ${JSON.stringify(geo)}`);
+  }
+  if (!geo.cov?.covers || geo.cov.contain) throw new Error(`${tag}: photo must cover (no cream strip): ${JSON.stringify(geo.cov)}`);
+  if (geo.cov.top + geo.cov.dh < geo.stage.bottom - 0.5) throw new Error(`${tag}: photo ends above the bottom edge`);
+  const chrome = [];
+  for (const sel of ["#btn-addressbook", "#wordmark"]) {
+    if (await page.locator(sel).isVisible().catch(() => false)) chrome.push(await page.locator(sel).boundingBox());
+  }
+  const visibleH = Math.min(geo.innerH, wantBottom); // Playwright can only click inside its viewport
+  for (const p of callablePeople()) {
+    const pt = await page.evaluate((n) => window.__hannafonTest.facePoint(n), p.nr);
+    const m = 12;
+    if (!pt || pt.x < m || pt.x > geo.innerW - m || pt.y < m || pt.y > visibleH - m) {
+      throw new Error(`${tag}: head #${p.nr} not on screen at default fit: ${JSON.stringify(pt)}`);
+    }
+    for (const b of chrome) {
+      if (b && pt.x > b.x - 4 && pt.x < b.x + b.width + 4 && pt.y > b.y - 4 && pt.y < b.y + b.height + 4) {
+        throw new Error(`${tag}: head #${p.nr} sits under a button`);
+      }
+    }
+    await page.mouse.click(pt.x, pt.y);
+    await page.locator("#zoom-card").waitFor({ state: "visible", timeout: 8000 });
+    const name = (await page.locator("#zoom-name").innerText()).trim();
+    if (name !== p.name) throw new Error(`${tag}: head #${p.nr} expected "${p.name}", got "${name}"`);
+    await unzoom(page);
+    await page.evaluate(() => window.__hannafonTest.resetNav());
+  }
+  return geo;
+}
+
+async function mediaContext(browser, { grant = false, permState = null, denyGum = false } = {}) {
+  const ctx = await browser.newContext({
+    viewport: { width: 393, height: 852 },
+    deviceScaleFactor: 3,
+    isMobile: true,
+    hasTouch: true,
+    userAgent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+  });
+  if (grant) await ctx.grantPermissions(["camera", "microphone"], { origin: ORIGIN });
+  await ctx.addInitScript(({ permState, denyGum }) => {
+    window.__gum = { calls: 0, streams: [] };
+    const md = navigator.mediaDevices;
+    const orig = md.getUserMedia.bind(md);
+    md.getUserMedia = async (c) => {
+      window.__gum.calls++;
+      if (denyGum) throw new DOMException("Permission denied", "NotAllowedError");
+      const s = await orig(c);
+      window.__gum.streams.push(s);
+      return s;
+    };
+    if (permState && navigator.permissions?.query) {
+      const oq = navigator.permissions.query.bind(navigator.permissions);
+      navigator.permissions.query = async (d) =>
+        d && (d.name === "camera" || d.name === "microphone")
+          ? { state: permState, onchange: null, addEventListener() {}, removeEventListener() {} }
+          : oq(d);
+    }
+  }, { permState, denyGum });
+  return ctx;
+}
+
+const gumInfo = (page) =>
+  page.evaluate(() => ({
+    calls: window.__gum.calls,
+    live: window.__gum.streams.flatMap((s) => s.getTracks()).filter((t) => t.readyState === "live").length,
+    log: window.__hannafonTest?.mediaPrimeLog?.() || [],
+  }));
+
 async function phoneContext(browser, viewport) {
   const se = viewport.width === 375;
   const ctx = await browser.newContext({
@@ -366,6 +504,8 @@ async function run() {
     await hanna.locator("#greeting").waitFor({ state: "visible", timeout: 8000 });
     await hanna.waitForTimeout(400);
     await shot(hanna, "hanna-home.jpg");
+    await assertTopClean(hanna, "hanna home 1180x820");
+    results.push("no topfade, opaque status bar tinted from photo");
 
     if ((await hanna.locator("i.halo").count()) < 20) {
       throw new Error("expected discreet halos on tappable people");
@@ -647,10 +787,142 @@ async function run() {
     await hanna.evaluate(() => window.__hannafonTest.stopRingtone());
     results.push("ringtone context running after tap");
 
+    // V1.05 landscape full-bleed: iPad 10 and iPad mini, with and without the
+    // iOS standalone "one status bar short" bug, all heads hittable at default fit.
+    {
+      const unit = await hanna.evaluate(() => {
+        const f = window.__hannafonTest.computeIosBottomGap;
+        return [
+          f({ standalone: true, screenW: 820, screenH: 1180, innerW: 1180, innerH: 796, safeTop: 24 }),
+          f({ standalone: true, screenW: 820, screenH: 1180, innerW: 1180, innerH: 796, safeTop: 0 }),
+          f({ standalone: false, screenW: 820, screenH: 1180, innerW: 1180, innerH: 796, safeTop: 24 }),
+          f({ standalone: true, screenW: 820, screenH: 1180, innerW: 678, innerH: 796, safeTop: 24 }),
+          f({ standalone: true, screenW: 744, screenH: 1133, innerW: 1133, innerH: 720, safeTop: 24 }),
+          f({ standalone: true, screenW: 402, screenH: 874, innerW: 402, innerH: 812, safeTop: 62 }),
+          f({ standalone: true, screenW: 820, screenH: 1180, innerW: 1180, innerH: 820, safeTop: 24 }),
+        ];
+      });
+      if (JSON.stringify(unit) !== JSON.stringify([24, 0, 0, 0, 24, 62, 0])) {
+        throw new Error("computeIosBottomGap: " + JSON.stringify(unit));
+      }
+      results.push("iOS bottom-gap detection unit cases");
+      const pad = [
+        [{ width: 1180, height: 820 }, null, "ipad-10 1180x820"],
+        [{ width: 1180, height: 796 }, { standalone: true, screenW: 820, screenH: 1180, safeTop: 0, expectGap: 0 }, "ipad-10 opaque bar 1180x796"],
+        [{ width: 1180, height: 796 }, { standalone: true, screenW: 820, screenH: 1180, safeTop: 24, expectGap: 24 }, "ipad-10 iOS-gap 1180x796+24"],
+      ];
+      for (const [vp, sim, tag] of pad) {
+        await assertLandscapeFullBleed(hanna, vp, tag, sim);
+      }
+      await shot(hanna, "v105-ipad10-iosgap.jpg");
+      await assertLandscapeFullBleed(hanna, { width: 1180, height: 820 }, "ipad-10 reset", null);
+      await assertTopClean(hanna, "hanna after full-bleed checks");
+      results.push("ipad 10 landscape full-bleed, all heads hittable (820 / 796 / 796+gap)");
+
+      const fbCtx = await browser.newContext({
+        viewport: { width: 1133, height: 744 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+      });
+      await fbCtx.grantPermissions(["camera", "microphone", "notifications"], { origin: ORIGIN });
+      const fb = await fbCtx.newPage();
+      await enterCode(fb);
+      await fb.locator("#setup-title").waitFor({ state: "visible", timeout: 20000 });
+      await waitPhotoReady(fb);
+      for (const [vp, sim, tag] of [
+        [{ width: 1133, height: 744 }, null, "ipad-mini 1133x744"],
+        [{ width: 1133, height: 720 }, { standalone: true, screenW: 744, screenH: 1133, safeTop: 0, expectGap: 0 }, "ipad-mini opaque bar 1133x720"],
+        [{ width: 1133, height: 720 }, { standalone: true, screenW: 744, screenH: 1133, safeTop: 24, expectGap: 24 }, "ipad-mini iOS-gap 1133x720+24"],
+      ]) {
+        await assertLandscapeFullBleed(fb, vp, tag, sim);
+      }
+      await shot(fb, "v105-ipad-mini-iosgap.jpg");
+      await fb.close();
+      await fbCtx.close();
+      results.push("ipad mini landscape full-bleed, all heads hittable (744 / 720 / 720+gap)");
+    }
+
+    // V1.05 camera/microphone: one early prompt on a tap, tracks stopped, no repeats.
+    {
+      // a) Fresh device, permission not decided: "Das bin ich" primes exactly once.
+      const aCtx = await mediaContext(browser, { permState: "prompt" });
+      const a = await aCtx.newPage();
+      await enterCode(a);
+      await a.locator("#setup-title").waitFor({ state: "visible", timeout: 20000 });
+      await a.waitForTimeout(600);
+      let g = await gumInfo(a);
+      if (g.calls !== 0) throw new Error("no camera request before any tap, got " + g.calls);
+      await identify(a, 22);
+      await a.locator("#screen-standby").waitFor({ state: "visible", timeout: 8000 });
+      await a.waitForTimeout(800);
+      g = await gumInfo(a);
+      if (g.calls !== 1 || g.live !== 0) throw new Error("setup prime: " + JSON.stringify(g));
+      await a.locator("#standby-hello").click();
+      await a.waitForTimeout(400);
+      g = await gumInfo(a);
+      if (g.calls !== 1) throw new Error("prime must run once per launch: " + JSON.stringify(g));
+      // b) Already set up, new launch: nothing on load, one prime on the first tap.
+      await a.reload({ waitUntil: "load" });
+      await a.locator("#screen-standby").waitFor({ state: "visible", timeout: 20000 });
+      await a.waitForTimeout(800);
+      g = await gumInfo(a);
+      if (g.calls !== 0) throw new Error("no camera request on launch without a tap: " + JSON.stringify(g));
+      await a.locator("#standby-hello").click();
+      await a.waitForTimeout(800);
+      g = await gumInfo(a);
+      if (g.calls !== 1 || g.live !== 0) throw new Error("first-tap prime: " + JSON.stringify(g));
+      await a.locator("#standby-sub").click();
+      await a.waitForTimeout(300);
+      if ((await gumInfo(a)).calls !== 1) throw new Error("second tap must not prompt again");
+      await openDisconnectDialog(a);
+      await confirmDisconnect(a);
+      await a.close();
+      await aCtx.close();
+      results.push("camera/mic primed once on tap (setup + first tap), tracks stopped");
+
+      // c) Already granted: no extra request at all.
+      const cCtx = await mediaContext(browser, { grant: true, permState: "granted" });
+      const c = await cCtx.newPage();
+      await enterCode(c);
+      await identify(c, 22);
+      await c.locator("#screen-standby").waitFor({ state: "visible", timeout: 8000 });
+      await c.locator("#standby-hello").click();
+      await c.waitForTimeout(600);
+      g = await gumInfo(c);
+      if (g.calls !== 0) throw new Error("granted: no prime expected: " + JSON.stringify(g));
+      await openDisconnectDialog(c);
+      await confirmDisconnect(c);
+      await c.close();
+      await cCtx.close();
+      results.push("camera/mic granted: no prime");
+
+      // d) Denied: setup still works, a call shows the existing message.
+      const dCtx = await mediaContext(browser, { permState: "prompt", denyGum: true });
+      const d = await dCtx.newPage();
+      await enterCode(d);
+      await identify(d, 22);
+      await d.locator("#screen-standby").waitFor({ state: "visible", timeout: 8000 });
+      await d.locator("#btn-call-host").click();
+      await d.locator("#screen-call").waitFor({ state: "visible", timeout: 8000 });
+      await d.waitForFunction(
+        () => document.getElementById("call-status")?.textContent.includes("Kamera oder Mikrofon nicht verfügbar"),
+        null,
+        { timeout: 8000 }
+      );
+      await d.locator("#btn-hangup").click();
+      await d.locator("#screen-standby").waitFor({ state: "visible", timeout: 8000 });
+      await openDisconnectDialog(d);
+      await confirmDisconnect(d);
+      await d.close();
+      await dCtx.close();
+      results.push("camera/mic denied handled");
+    }
+
     // Structural push endpoint (no delivery assertion locally)
     const health = await fetch(HEALTH).then((r) => r.json());
-    if (!health.ok || health.version !== "V1.04") throw new Error("health/version");
-    results.push("worker health V1.04");
+    if (!health.ok || health.version !== "V1.05") throw new Error("health/version");
+    results.push("worker health V1.05");
 
     console.log("E2E OK:", results.join(", "));
     console.log("screenshots:", fs.readdirSync(shots).join(", "));

@@ -23,6 +23,10 @@ import {
 import { Signaling } from "./signaling.js";
 import {
   getLocalStream,
+  primeMediaPermission,
+  refreshMediaPermissionState,
+  mediaPermissionState,
+  mediaPrimeLog,
   createPeer,
   addIce,
   flushIce,
@@ -51,7 +55,6 @@ const ui = {
   sharp: $("photo-sharp"),
   blur: $("photo-blur"),
   blurFill: $("photo-blur-fill"),
-  topfade: $("topfade"),
   hits: $("hit-layer"),
   greeting: $("greeting"),
   greet1: $("greeting-line1"),
@@ -142,6 +145,8 @@ function showScreen(name) {
   if (!showPhoto) app.classList.remove("is-zoomed");
   if (name !== "photo") closeAddressbook();
   updateCornerButtons();
+  state.screen = name;
+  requestEdgeColors();
 }
 
 // Bottom-left corner: "Adressbuch" on the host overview, "Zurück zum
@@ -218,6 +223,7 @@ function openAddressbook() {
   ui.abList.scrollTop = 0;
   document.getElementById("app").classList.add("is-addressbook");
   updateCornerButtons();
+  requestEdgeColors();
 }
 
 function closeAddressbook() {
@@ -225,6 +231,7 @@ function closeAddressbook() {
   show(ui.addressbook, false);
   document.getElementById("app").classList.remove("is-addressbook");
   updateCornerButtons();
+  requestEdgeColors();
 }
 
 function callFromAddressbook(person) {
@@ -236,7 +243,6 @@ function callFromAddressbook(person) {
 function setZoomedClass(on) {
   ui.stage.classList.toggle("is-zoomed", on);
   document.getElementById("app").classList.toggle("is-zoomed", on);
-  if (ui.topfade) ui.topfade.classList.toggle("is-hidden", on);
 }
 
 function show(el, on) {
@@ -410,6 +416,7 @@ function updateChromeContrast() {
     !state.zoomed &&
     layout.dh * (state.nav.s || 1) < (ui.stage.clientHeight - 8);
   app.classList.toggle("is-letterboxed", letterboxed);
+  requestEdgeColors();
 }
 
 function clampNav() {
@@ -573,6 +580,7 @@ async function applyZoom(person, animate = true) {
   ui.greeting.classList.add("is-hidden");
   ui.setupTitle.classList.add("is-hidden");
   updateCornerButtons();
+  requestEdgeColors();
 }
 
 function unzoom() {
@@ -749,6 +757,9 @@ async function loadMedia() {
   if (ui.blurFill) ui.blurFill.src = blurUrl;
   ui.sharp.alt = "Familienfoto";
   await ui.sharp.decode().catch(() => {});
+  await ui.blur.decode().catch(() => {});
+  buildEdgeSamplers();
+  requestEdgeColors();
   await paintHostPortrait();
   // Prefetch masks in the background into Cache Storage.
   for (const p of state.config.people || []) {
@@ -828,6 +839,9 @@ ui.codeForm.addEventListener("submit", async (ev) => {
 
 ui.btnConfirm.addEventListener("click", () => {
   if (!state.zoomed) return;
+  // Ask iOS for camera + microphone now, on this tap, instead of at the first
+  // call. Tracks are stopped immediately; nothing keeps the camera running.
+  primeMediaPermission("setup");
   state.identity = state.zoomed;
   localStorage.setItem(STORAGE_IDENTITY, String(state.identity.nr));
   connectSignaling();
@@ -892,6 +906,202 @@ window.addEventListener("orientationchange", requestStageLayout);
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", requestStageLayout);
 }
+
+// ---------------------------------------------------------------------------
+// iOS home-screen viewport (V1.05)
+//
+// WebKit bug (iOS/iPadOS 17–26, home-screen web apps installed with
+// black-translucent or a manifest): the page is drawn from the physical top of
+// the screen but sized as if the status bar still took its slice. The missing
+// height falls off the bottom as an unpaintable strip (the "weißer Streifen").
+// Signature: screen height − innerHeight === safe-area-inset-top, at full
+// screen width. When that matches, grow html/body/#app by exactly that gap so
+// the photo and the bottom controls reach the real bottom edge. In every other
+// situation (Safari tab, Split View, a correctly inset web view) the gap is 0.
+function computeIosBottomGap({ standalone, screenW, screenH, innerW, innerH, safeTop }) {
+  if (!standalone) return 0;
+  if (!(screenW > 0 && screenH > 0 && innerW > 0 && innerH > 0)) return 0;
+  const long = Math.max(screenW, screenH);
+  const short = Math.min(screenW, screenH);
+  const landscape = innerW > innerH;
+  const fullW = landscape ? long : short;
+  const fullH = landscape ? short : long;
+  if (Math.abs(innerW - fullW) > 2) return 0; // Split View / Stage Manager window
+  const gap = Math.round(fullH - innerH);
+  if (gap < 8 || gap > 80) return 0;
+  if (!(safeTop >= 8) || Math.abs(gap - safeTop) > 3) return 0;
+  return gap;
+}
+
+let safeProbe = null;
+function readSafeTop() {
+  if (!safeProbe) {
+    safeProbe = document.createElement("div");
+    safeProbe.setAttribute("aria-hidden", "true");
+    safeProbe.style.cssText =
+      "position:fixed;left:0;top:0;width:0;visibility:hidden;pointer-events:none;height:env(safe-area-inset-top,0px)";
+    document.body.appendChild(safeProbe);
+  }
+  return safeProbe.getBoundingClientRect().height || 0;
+}
+
+function updateViewportFix() {
+  const t = window.__HANNAFON_VIEWPORT_TEST__ || {};
+  const gap = computeIosBottomGap({
+    standalone: t.standalone ?? isStandalone(),
+    screenW: t.screenW ?? window.screen?.width,
+    screenH: t.screenH ?? window.screen?.height,
+    innerW: window.innerWidth,
+    innerH: window.innerHeight,
+    safeTop: t.safeTop ?? readSafeTop(),
+  });
+  const root = document.documentElement;
+  const prev = root.style.getPropertyValue("--ios-gap");
+  const next = `${gap}px`;
+  if (prev !== next) {
+    root.style.setProperty("--ios-gap", next);
+    state.iosGap = gap;
+    return true;
+  }
+  return false;
+}
+
+function onViewportChange() {
+  if (updateViewportFix()) requestStageLayout();
+}
+updateViewportFix();
+window.addEventListener("resize", onViewportChange);
+window.addEventListener("orientationchange", () => setTimeout(onViewportChange, 350));
+window.addEventListener("pageshow", onViewportChange);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) onViewportChange();
+});
+window.visualViewport?.addEventListener("resize", onViewportChange);
+
+// ---------------------------------------------------------------------------
+// Status bar + page edge colours (V1.05)
+//
+// The app now uses the opaque status bar ("default"): on iOS 26 a translucent
+// status bar gets the system's Liquid Glass blur over whatever we draw under
+// it, which smeared the top of the family photo. With an opaque bar, iOS tints
+// it with theme-color, so we keep theme-color equal to the colour of the photo
+// row that touches the top edge (cream on cream screens, dark in a call). The
+// html background follows the photo's bottom edge, so any area iOS paints
+// outside the page blends into the photo instead of showing cream/white.
+const CREAM = "#F6EFE3";
+const CALL_BG = "#111111";
+const edgeSamplers = { sharp: null, blur: null };
+
+function buildSampler(img) {
+  try {
+    if (!img?.naturalWidth) return null;
+    const w = 96;
+    const h = Math.max(8, Math.round((w * img.naturalHeight) / img.naturalWidth));
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    return { w, h, data: ctx.getImageData(0, 0, w, h).data };
+  } catch {
+    return null; // tainted or unsupported: keep the fallback colours
+  }
+}
+
+function buildEdgeSamplers() {
+  edgeSamplers.sharp = buildSampler(ui.sharp);
+  edgeSamplers.blur = buildSampler(ui.blur) || edgeSamplers.sharp;
+}
+
+function toHex(r, g, b) {
+  const h = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+// Average colour of a band of the photo, in fractions of the photo (0..1).
+function sampleBand(sampler, fx0, fx1, fy0, fy1) {
+  if (!sampler) return null;
+  const { w, h, data } = sampler;
+  const x0 = Math.max(0, Math.min(w - 1, Math.floor(Math.min(fx0, fx1) * w)));
+  const x1 = Math.max(x0 + 1, Math.min(w, Math.ceil(Math.max(fx0, fx1) * w)));
+  const y0 = Math.max(0, Math.min(h - 1, Math.floor(Math.min(fy0, fy1) * h)));
+  const y1 = Math.max(y0 + 1, Math.min(h, Math.ceil(Math.max(fy0, fy1) * h)));
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      n++;
+    }
+  }
+  return n ? toHex(r / n, g / n, b / n) : null;
+}
+
+// Which part of the photo touches the top and bottom edge of the screen right now.
+function visibleEdgeColors() {
+  const layout = state.layout;
+  if (!layout || !layout.dw || !layout.dh) return null;
+  const sampler = state.zoomed ? edgeSamplers.blur : edgeSamplers.sharp;
+  if (!sampler) return null;
+  const v = currentView();
+  const W = ui.stage.clientWidth;
+  const H = ui.stage.clientHeight;
+  const toFx = (cx) => (cx - layout.ox - v.tx) / v.s / layout.dw;
+  const toFy = (cy) => (cy - layout.oy - v.ty) / v.s / layout.dh;
+  const fx0 = Math.max(0, toFx(0));
+  const fx1 = Math.min(1, toFx(W));
+  const band = 0.025;
+  const fyTop = toFy(0);
+  const fyBot = toFy(H);
+  const top = fyTop < -0.002 ? null : sampleBand(sampler, fx0, fx1, fyTop, fyTop + band);
+  const bottom = fyBot > 1.002 ? null : sampleBand(sampler, fx0, fx1, fyBot - band, fyBot);
+  return { top, bottom };
+}
+
+function setEdgeColors(top, bottom) {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta && meta.getAttribute("content") !== top) meta.setAttribute("content", top);
+  const root = document.documentElement;
+  root.style.setProperty("--edge-top", top);
+  root.style.setProperty("--edge-bottom", bottom);
+  state.edge = { top, bottom };
+}
+
+function updateEdgeColors() {
+  const screen = state.screen;
+  if (screen === "call") return setEdgeColors(CALL_BG, CALL_BG);
+  const onPhoto = (screen === "photo" || screen === "incoming") && !ui.photo.hidden;
+  if (!onPhoto || !ui.addressbook.hidden) return setEdgeColors(CREAM, CREAM);
+  const c = visibleEdgeColors();
+  setEdgeColors(c?.top || CREAM, c?.bottom || CREAM);
+}
+
+let edgeRaf = 0;
+function requestEdgeColors() {
+  if (edgeRaf) return;
+  edgeRaf = requestAnimationFrame(() => {
+    edgeRaf = 0;
+    updateEdgeColors();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Camera/microphone permission (V1.05)
+// Already set up? Then the first tap after launch asks iOS for camera and
+// microphone (only if the Permissions API does not already say granted or
+// denied). This moves the system prompt away from the moment of a call.
+refreshMediaPermissionState();
+document.getElementById("app").addEventListener(
+  "pointerdown",
+  () => {
+    if (!state.identity || !state.config) return;
+    if (state.mode !== "host" && state.mode !== "standby" && ui.incoming.hidden) return;
+    primeMediaPermission("first-tap");
+  },
+  { capture: true }
+);
 
 let pressTimer = null;
 ui.wordmark.addEventListener("pointerdown", () => {
@@ -1333,6 +1543,19 @@ window.__hannafonTest = {
     applyStageLayout();
   },
   applyLayout: () => applyStageLayout(),
+  computeIosBottomGap,
+  updateViewportFix: () => {
+    updateViewportFix();
+    applyStageLayout();
+    return state.iosGap || 0;
+  },
+  iosGap: () => state.iosGap || 0,
+  edgeColors: () => {
+    updateEdgeColors();
+    return { ...(state.edge || {}) };
+  },
+  mediaPermissionState,
+  mediaPrimeLog,
   audioState: () => audioContextState(),
   isAudioUnlocked,
   unlockAudio,

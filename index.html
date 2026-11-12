@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- V1.05: "default" on purpose. black-translucent puts the photo under the
+       status bar, where iOS 26 lays its Liquid Glass blur over it, and it makes
+       WebKit size home-screen apps one status bar short (strip at the bottom).
+       Do not switch back. iOS bakes this in when the icon is added. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Hannafon">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#F6EFE3">
   <title>Hannafon</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
@@ -46,7 +50,6 @@
           <div id="hit-layer" class="hit-layer"></div>
         </div>
       </div>
-      <div id="topfade" class="topfade"></div>
       <div id="greeting" class="greeting">
         <p id="greeting-line1"></p>
         <p id="greeting-line2"></p>
@@ -157,7 +160,7 @@
     <div id="taken-toast" class="taken-toast hidden" hidden>Anderswo angenommen</div>
 
     <div id="reset-sheet" class="reset-sheet hidden" hidden>
-      <p class="version">Hannafon V1.04</p>
+      <p class="version">Hannafon V1.05</p>
       <button type="button" id="btn-reset" class="pill pill-ink">Alles zurücksetzen</button>
       <button type="button" id="btn-reset-cancel" class="btn-text">Abbrechen</button>
     </div>

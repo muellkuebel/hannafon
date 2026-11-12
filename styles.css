@@ -33,19 +33,29 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
+  /* Set by JS (V1.05): height iOS forgot to give a home-screen web app
+     (status-bar-sized strip at the bottom). 0 everywhere else. */
+  --ios-gap: 0px;
+  /* Set by JS (V1.05): colours of the photo rows touching the screen edges. */
+  --edge-top: var(--cream);
+  --edge-bottom: var(--cream);
 }
 
 * { box-sizing: border-box; }
 html, body {
   margin: 0;
   width: 100%;
-  height: 100%;
-  height: 100dvh;
-  min-height: 100dvh;
-  min-height: -webkit-fill-available;
   position: fixed;
-  inset: 0;
-  background: var(--cream);
+  top: 0;
+  left: 0;
+  right: 0;
+  /* Full viewport plus the strip iOS standalone forgets (--ios-gap, see app.js).
+     dvh, not lvh: in a Safari tab the bottom pills must stay above the toolbar. */
+  height: calc(100% + var(--ios-gap));
+  height: calc(100dvh + var(--ios-gap));
+  /* Whatever iOS paints outside the page (under-page area, launch, rotation)
+     takes the colour of the photo's bottom edge instead of cream/white. */
+  background: var(--edge-bottom);
   color: var(--ink);
   font-family: "Nunito", ui-rounded, system-ui, sans-serif;
   -webkit-user-select: none;
@@ -63,12 +73,12 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
 
 #app {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
   width: 100%;
-  height: 100%;
-  height: 100dvh;
-  min-height: 100dvh;
-  min-height: -webkit-fill-available;
+  height: calc(100vh + var(--ios-gap));
+  height: calc(100dvh + var(--ios-gap));
   overflow: hidden;
   background: var(--cream);
 }
@@ -287,6 +297,11 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   overflow: hidden;
   background: var(--cream);
 }
+/* Landscape is always cover (photoLayout); paint any sub-pixel seam with the
+   photo's own edge colour instead of cream. */
+@media (orientation: landscape) {
+  .photo-stage { background: var(--edge-bottom); }
+}
 #photo-blur-fill {
   position: absolute;
   inset: 0;
@@ -298,17 +313,8 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   transition: opacity 0.55s ease;
 }
 .photo-stage.is-zoomed #photo-blur-fill { opacity: 1; }
-.topfade {
-  position: absolute;
-  left: 0; right: 0; top: 0;
-  height: 160px;
-  z-index: 3;
-  pointer-events: none;
-  background: linear-gradient(180deg, rgba(20,14,8,.5), rgba(20,14,8,0));
-  transition: opacity 0.45s ease;
-}
-.photo-stage.is-zoomed ~ .topfade,
-.topfade.is-hidden { opacity: 0; }
+/* V1.05: no dark gradient over the top of the family photo any more. The
+   greeting and wordmark carry their own text-shadow. */
 .photo-stack {
   position: absolute;
   transform-origin: 0 0;
@@ -719,8 +725,6 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
     color: var(--ink);
     text-shadow: none;
   }
-  #app.is-photo:not(.is-zoomed).is-letterboxed .topfade,
-  #app.is-letterboxed .photo-stage:not(.is-zoomed) ~ .topfade { opacity: 0; }
   .setup-title {
     width: min(92vw, 900px);
     padding-inline: 12px;
