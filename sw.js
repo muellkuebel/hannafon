@@ -1,5 +1,5 @@
-const VERSION = "V1.03";
-const CACHE = "hannafon-v1.03";
+const VERSION = "V1.04";
+const CACHE = "hannafon-v1.04";
 const SHELL = [
   "./",
   "./index.html",
@@ -17,6 +17,7 @@ const SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/favicon-32.png",
   "./icons/favicon.ico",
+  "./icons/family-heads.svg",
   "./fonts/Fraunces-Variable.ttf",
   "./fonts/Fraunces-Italic-Variable.ttf",
   "./fonts/Nunito-Variable.ttf",

@@ -63,6 +63,37 @@
         </button>
         <p id="zoom-soon" class="soon hidden" hidden>Bald verfügbar</p>
       </div>
+      <button type="button" id="btn-addressbook" class="pill pill-cream corner-pill hidden" hidden>
+        <!-- Heroicons v2 book-open (24/solid), MIT -->
+        <svg class="icon-book" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.25 4.533A9.707 9.707 0 0 0 6 3a9.735 9.735 0 0 0-3.25.555.75.75 0 0 0-.5.707v14.25a.75.75 0 0 0 1 .707A8.237 8.237 0 0 1 6 18.75c1.995 0 3.823.707 5.25 1.886V4.533ZM12.75 20.636A8.214 8.214 0 0 1 18 18.75c.966 0 1.89.166 2.75.47a.75.75 0 0 0 1-.708V4.262a.75.75 0 0 0-.5-.707A9.735 9.735 0 0 0 18 3a9.707 9.707 0 0 0-5.25 1.533v16.103Z"/></svg>
+        <span>Adressbuch</span>
+      </button>
+      <button type="button" id="btn-back-photo" class="pill pill-cream corner-pill hidden" hidden aria-label="Zurück zum Familienfoto">
+        <!-- Drei angedeutete Köpfe (eigenes Icon, siehe icons/family-heads.svg) -->
+        <svg class="icon-heads" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 24" fill="currentColor" aria-hidden="true"><g opacity="0.8"><circle cx="5.4" cy="8.4" r="2.9"/><path d="M0.8 20.2v-0.9a4.6 5.6 0 0 1 9.2 0v0.9Z"/><circle cx="24.6" cy="8.4" r="2.9"/><path d="M20 20.2v-0.9a4.6 5.6 0 0 1 9.2 0v0.9Z"/></g><g class="heads-front" stroke="#F6EFE3" stroke-width="1.6" stroke-linejoin="round" paint-order="stroke"><circle cx="15" cy="7.4" r="3.3"/><path d="M9.6 21v-1a5.4 7 0 0 1 10.8 0v1Z"/></g></svg>
+        <span class="back-label"><span>Zurück zum</span> <span>Familienfoto</span></span>
+      </button>
+    </section>
+
+    <section id="screen-addressbook" class="addressbook hidden" hidden aria-label="Adressbuch">
+      <header class="ab-head">
+        <h1 class="ab-title">Adressbuch</h1>
+        <button type="button" id="btn-ab-close" class="pill pill-cream ab-close">
+          <svg class="icon-heads" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 24" fill="currentColor" aria-hidden="true"><g opacity="0.8"><circle cx="5.4" cy="8.4" r="2.9"/><path d="M0.8 20.2v-0.9a4.6 5.6 0 0 1 9.2 0v0.9Z"/><circle cx="24.6" cy="8.4" r="2.9"/><path d="M20 20.2v-0.9a4.6 5.6 0 0 1 9.2 0v0.9Z"/></g><g class="heads-front" stroke="#F6EFE3" stroke-width="1.6" stroke-linejoin="round" paint-order="stroke"><circle cx="15" cy="7.4" r="3.3"/><path d="M9.6 21v-1a5.4 7 0 0 1 10.8 0v1Z"/></g></svg>
+          <span>Zum Foto</span>
+        </button>
+      </header>
+      <ul id="ab-list" class="ab-list"></ul>
+      <template id="ab-row-tpl">
+        <li class="ab-row">
+          <span class="ab-avatar" aria-hidden="true"><span class="ab-letter"></span></span>
+          <span class="ab-name"></span>
+          <button type="button" class="pill pill-green ab-call">
+            <span>Anrufen</span>
+            <svg class="icon-phone" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
+          </button>
+        </li>
+      </template>
     </section>
 
     <section id="screen-standby" class="screen hidden" hidden>
@@ -126,7 +157,7 @@
     <div id="taken-toast" class="taken-toast hidden" hidden>Anderswo angenommen</div>
 
     <div id="reset-sheet" class="reset-sheet hidden" hidden>
-      <p class="version">Hannafon V1.03</p>
+      <p class="version">Hannafon V1.04</p>
       <button type="button" id="btn-reset" class="pill pill-ink">Alles zurücksetzen</button>
       <button type="button" id="btn-reset-cancel" class="btn-text">Abbrechen</button>
     </div>

@@ -94,6 +94,12 @@ const ui = {
   btnDisconnectConfirm: $("btn-disconnect-confirm"),
   btnDisconnectCancel: $("btn-disconnect-cancel"),
   takenToast: $("taken-toast"),
+  btnAddressbook: $("btn-addressbook"),
+  btnBackPhoto: $("btn-back-photo"),
+  addressbook: $("screen-addressbook"),
+  abList: $("ab-list"),
+  abRowTpl: $("ab-row-tpl"),
+  btnAbClose: $("btn-ab-close"),
 };
 
 const state = {
@@ -134,6 +140,97 @@ function showScreen(name) {
   app.classList.toggle("is-photo", showPhoto);
   app.classList.toggle("is-in-call", name === "call");
   if (!showPhoto) app.classList.remove("is-zoomed");
+  if (name !== "photo") closeAddressbook();
+  updateCornerButtons();
+}
+
+// Bottom-left corner: "Adressbuch" on the host overview, "Zurück zum
+// Familienfoto" while zoomed on a person. Never both, never on incoming/call.
+function updateCornerButtons() {
+  const onPhoto = !ui.photo.hidden && ui.incoming.hidden && ui.call.hidden;
+  const bookOpen = !ui.addressbook.hidden;
+  const zoomed = !!state.zoomed;
+  const canBack = onPhoto && !bookOpen && zoomed && (state.mode === "host" || state.mode === "setup");
+  const canBook =
+    onPhoto && !bookOpen && !zoomed && state.mode === "host" &&
+    !!state.identity && isHostPerson(state.identity, state.config);
+  show(ui.btnBackPhoto, canBack);
+  show(ui.btnAddressbook, canBook);
+  document.getElementById("app").classList.toggle("has-back-pill", canBack);
+}
+
+// Everyone Hanna can call: callable, tappable, not the host (so never 7, 12, or 10).
+function addressbookPeople() {
+  const cfg = state.config;
+  if (!cfg) return [];
+  return (cfg.people || [])
+    .filter((p) => p && p.callable && isTappable(p) && !isHostPerson(p, cfg))
+    .slice()
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), "de"));
+}
+
+const AVATAR_TINTS = ["#6a8f6b", "#3d6b7a", "#8a5a4a", "#7a6a3d", "#5a5f8a", "#8a4a6a", "#4a7a6a"];
+
+function paintAvatar(el, person) {
+  const letter = el.querySelector(".ab-letter");
+  letter.textContent = String(person.name || "?").trim().charAt(0).toUpperCase();
+  el.style.background = AVATAR_TINTS[Number(person.nr) % AVATAR_TINTS.length];
+  // Round face crop from the already loaded (code-gated) family photo.
+  const photo = state.config?.photo;
+  const src = ui.sharp?.currentSrc || ui.sharp?.src;
+  if (!photo || !src || !ui.sharp.naturalWidth) return;
+  const f = origToPhoto(person, photo);
+  if (!(f.r > 0)) return;
+  const size = el.getBoundingClientRect().width || 52;
+  const k = size / (f.r * 2.5); // face fills most of the circle
+  el.style.backgroundImage = `url("${src}")`;
+  el.style.backgroundSize = `${photo.width * k}px ${photo.height * k}px`;
+  el.style.backgroundPosition = `${size / 2 - f.x * k}px ${size / 2 - f.y * k}px`;
+  el.style.backgroundRepeat = "no-repeat";
+  el.classList.add("has-photo");
+}
+
+function renderAddressbook() {
+  ui.abList.innerHTML = "";
+  for (const p of addressbookPeople()) {
+    const row = ui.abRowTpl.content.firstElementChild.cloneNode(true);
+    row.dataset.nr = String(p.nr);
+    row.querySelector(".ab-name").textContent = p.name;
+    const btn = row.querySelector(".ab-call");
+    btn.dataset.nr = String(p.nr);
+    btn.setAttribute("aria-label", `${p.name} anrufen`);
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      callFromAddressbook(p);
+    });
+    ui.abList.appendChild(row);
+  }
+  for (const row of ui.abList.querySelectorAll(".ab-row")) {
+    paintAvatar(row.querySelector(".ab-avatar"), personByNr(row.dataset.nr));
+  }
+}
+
+function openAddressbook() {
+  if (state.mode !== "host" || !isHostPerson(state.identity, state.config)) return;
+  if (state.zoomed) unzoom();
+  show(ui.addressbook, true);
+  renderAddressbook();
+  ui.abList.scrollTop = 0;
+  document.getElementById("app").classList.add("is-addressbook");
+  updateCornerButtons();
+}
+
+function closeAddressbook() {
+  if (!ui.addressbook || ui.addressbook.hidden) return;
+  show(ui.addressbook, false);
+  document.getElementById("app").classList.remove("is-addressbook");
+  updateCornerButtons();
+}
+
+function callFromAddressbook(person) {
+  // Same path as choosing the person on the photo and tapping "Anrufen".
+  closeAddressbook();
+  startCall(person);
 }
 
 function setZoomedClass(on) {
@@ -475,6 +572,7 @@ async function applyZoom(person, animate = true) {
   layoutHits();
   ui.greeting.classList.add("is-hidden");
   ui.setupTitle.classList.add("is-hidden");
+  updateCornerButtons();
 }
 
 function unzoom() {
@@ -491,6 +589,7 @@ function unzoom() {
   show(ui.zoomSoon, false);
   show(ui.zoomCard, false);
   layoutHits();
+  updateCornerButtons();
 }
 
 async function onPersonTap(person) {
@@ -618,6 +717,7 @@ async function refreshPushUi() {
 }
 
 function goHome() {
+  closeAddressbook();
   unzoom();
   if (!state.identity) {
     state.mode = "setup";
@@ -744,6 +844,19 @@ ui.btnCallHost.addEventListener("click", () => {
 });
 
 ui.stage.addEventListener("click", onStageBackground);
+
+ui.btnBackPhoto.addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  if (state.zoomed) unzoom();
+});
+ui.btnAddressbook.addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  openAddressbook();
+});
+ui.btnAbClose.addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  closeAddressbook();
+});
 
 function viewportKey() {
   const vv = window.visualViewport;
@@ -1195,6 +1308,7 @@ window.__hannafonTest = {
       pt.y <= rect.bottom;
     return pt ? { x: pt.x, y: pt.y, r: f.r * (currentView().s || 1), nr: p.nr, name: p.name, onScreen: !!on } : null;
   },
+  addressbookNrs: () => addressbookPeople().map((p) => p.nr),
   pickAt(x, y) {
     const p = pickPersonAt(x, y);
     return p ? { nr: p.nr, name: p.name } : null;

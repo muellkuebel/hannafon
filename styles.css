@@ -427,6 +427,131 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   color: var(--ink);
 }
 
+/* V1.04: bottom-left corner pills (Adressbuch on the host overview,
+   "Zurück zum Familienfoto" while zoomed). Cream, a bit smaller than Anrufen. */
+.pill-cream {
+  background: var(--cream);
+  color: var(--ink);
+  box-shadow: 0 8px 22px rgba(47, 33, 24, 0.22), inset 0 0 0 1px rgba(47, 33, 24, 0.08);
+}
+.corner-pill {
+  position: absolute;
+  left: calc(22px + var(--safe-l));
+  bottom: calc(33px + var(--safe-b));
+  z-index: 6;
+  min-height: 62px;
+  max-width: 48%;
+  padding: 6px 24px 6px 18px;
+  gap: 12px;
+  font-size: 22px;
+  font-weight: 750;
+  line-height: 1.12;
+  text-align: left;
+}
+.corner-pill .icon-book { width: 28px; height: 28px; flex: 0 0 auto; }
+.pill .icon-heads { width: 36px; height: 29px; flex: 0 0 auto; }
+.icon-heads .heads-front { stroke: var(--cream); }
+.back-label > span { display: inline-block; white-space: nowrap; }
+
+/* Zoomed with the back pill: name + Anrufen move to the right so the two never collide. */
+#app.has-back-pill .zoom-card {
+  left: auto;
+  right: calc(22px + var(--safe-r));
+  transform: none;
+  width: auto;
+  max-width: calc(52% - 44px);
+  align-items: flex-end;
+  text-align: right;
+}
+
+/* Adressbuch: calm list, three columns on iPad landscape. */
+.addressbook {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  background: var(--cream);
+  padding: calc(18px + var(--safe-t)) calc(28px + var(--safe-r)) 0 calc(28px + var(--safe-l));
+}
+#app.is-addressbook .topbar { display: none; }
+.ab-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0 14px;
+}
+.ab-title {
+  margin: 0;
+  font-size: clamp(28px, 3.2vw, 36px);
+  line-height: 1.1;
+}
+.ab-close {
+  min-height: 56px;
+  padding: 0 22px 0 16px;
+  font-size: 20px;
+  gap: 10px;
+}
+.ab-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 4px 2px calc(24px + var(--safe-b));
+  list-style: none;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  align-content: start;
+  gap: 10px 16px;
+}
+.ab-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 70px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 2px 8px rgba(47, 33, 24, 0.07);
+}
+.ab-avatar {
+  position: relative;
+  flex: 0 0 auto;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--cream);
+  font-family: "Fraunces", ui-serif, Georgia, serif;
+  font-size: 22px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 2px rgba(246, 239, 227, 0.9);
+}
+.ab-avatar.has-photo .ab-letter { visibility: hidden; }
+.ab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: "Fraunces", ui-serif, Georgia, serif;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  font-size: 23px;
+  line-height: 1.12;
+  overflow-wrap: break-word;
+}
+.ab-call {
+  flex: 0 0 auto;
+  min-height: 52px;
+  padding: 0 18px;
+  gap: 8px;
+  font-size: 19px;
+  box-shadow: 0 4px 12px rgba(31, 154, 74, 0.25);
+}
+
 #screen-incoming {
   background: transparent;
   pointer-events: none;
@@ -636,6 +761,27 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   .btn-disconnect { font-size: 16px; }
   .reset-sheet { width: min(92vw, 360px); padding: 24px 20px; }
   #code-input { font-size: 26px; padding: 16px 14px; }
+  .corner-pill {
+    left: calc(14px + var(--safe-l));
+    bottom: calc(18px + var(--safe-b));
+    min-height: 52px;
+    max-width: calc(100% - 28px);
+    padding: 4px 18px 4px 14px;
+    font-size: 18px;
+  }
+  .pill .icon-heads { width: 30px; height: 24px; }
+  .corner-pill .icon-book { width: 24px; height: 24px; }
+  /* Phones: keep name + button centered but lift them above the back pill. */
+  #app.has-back-pill .zoom-card {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(94vw, 520px);
+    max-width: none;
+    align-items: center;
+    text-align: center;
+    bottom: calc(84px + var(--safe-b));
+  }
 }
 
 @media (max-width: 400px) and (orientation: portrait) {

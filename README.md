@@ -1,6 +1,6 @@
 # Hannafon
 
-Lokale PWA für Familien-Videoanrufe (V1.03). Vanilla HTML, CSS und JavaScript.
+Lokale PWA für Familien-Videoanrufe (V1.04). Vanilla HTML, CSS und JavaScript.
 
 Live-Test (GitHub Pages + Cloudflare Worker):
 https://muellkuebel.github.io/hannafon/
@@ -26,10 +26,11 @@ npm run test:e2e
 
 ## Hinweise
 
-- Service-Worker-Cache: `hannafon-v1.03`
+- Service-Worker-Cache: `hannafon-v1.04`
 - Verstecktes Zurücksetzen: Hannafon-Schriftzug fünf Sekunden gedrückt halten (löscht auch den Familien-Code)
 - Empfänger können unten auf Standby „Dieses Gerät trennen“ tippen: nur dieses Gerät, der Familien-Code bleibt
 - Mehrere Geräte pro Person: jedes Gerät hat eine eigene ID, ein Anruf klingelt überall, das erste Annehmen gewinnt
 - Manifest-Orientation ist `any` (iPhone hochkant für Empfänger, iPad-Querformat über das Layout)
 - Das Telefonhörer-Icon ist Heroicons v2 „phone“ (24/solid), MIT-Lizenz; siehe `icons/HEROICONS-LICENSE.txt`
+- Adressbuch-Icon: Heroicons v2 „book-open“ (24/solid), MIT. „Zurück zum Familienfoto“: eigenes Icon mit drei angedeuteten Köpfen (`icons/family-heads.svg`)
 - Familienfoto, Masken, Namen und Geheimnisse gehören nicht in dieses Repository

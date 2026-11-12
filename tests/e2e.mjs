@@ -176,6 +176,14 @@ async function unzoom(page) {
 }
 
 
+async function assertHidden(page, sel, why) {
+  if (await page.locator(sel).isVisible().catch(() => false)) throw new Error(`${sel} should be hidden: ${why}`);
+}
+
+function boxesOverlap(a, b) {
+  return !!(a && b && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height);
+}
+
 async function waitPhotoReady(page) {
   await page.waitForFunction(() => window.__hannafonTest && window.__hannafonTest.ready(), { timeout: 20000 });
 }
@@ -269,8 +277,12 @@ async function walkReceiverShots(page, tag) {
     throw new Error("setup title mismatch on " + tag);
   }
   await page.waitForTimeout(400);
+  await assertHidden(page, "#btn-addressbook", tag + " setup is not the host");
+  await assertHidden(page, "#btn-back-photo", tag + " setup not zoomed");
   await shot(page, `${tag}-setup.jpg`);
   await zoomTo(page, 22, "Daniel");
+  await assertHidden(page, "#btn-addressbook", tag + " setup zoom");
+  await page.locator("#btn-back-photo").waitFor({ state: "visible", timeout: 4000 });
   await shot(page, `${tag}-setup-zoom.jpg`);
   await page.locator("#btn-confirm").click();
   await page.locator("#screen-standby").waitFor({ state: "visible", timeout: 8000 });
@@ -280,6 +292,8 @@ async function walkReceiverShots(page, tag) {
   if (!iconSrc.includes("icon-512")) {
     throw new Error("standby host tile should use the app icon, got " + iconSrc);
   }
+  await assertHidden(page, "#btn-addressbook", tag + " receiver standby");
+  await assertHidden(page, "#screen-addressbook", tag + " receiver standby");
   await page.waitForTimeout(400);
   await shot(page, `${tag}-standby.jpg`);
 }
@@ -371,9 +385,57 @@ async function run() {
     }
     results.push("zoom gallery " + people.length);
 
+    // Adressbuch: host only, overview only, callable people only.
+    await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 8000 });
+    await assertHidden(hanna, "#btn-back-photo", "host overview is not zoomed");
+    const bookLabel = (await hanna.locator("#btn-addressbook").innerText()).trim();
+    if (bookLabel !== "Adressbuch") throw new Error("addressbook label: " + bookLabel);
+    await shot(hanna, "hanna-overview-adressbuch.jpg");
+    await hanna.locator("#btn-addressbook").click();
+    await hanna.locator("#screen-addressbook").waitFor({ state: "visible", timeout: 5000 });
+    await assertHidden(hanna, "#btn-addressbook", "list is open");
+    const listNrs = await hanna.$$eval("#ab-list .ab-row", (rows) => rows.map((r) => Number(r.dataset.nr)));
+    const expectNrs = loadPeople()
+      .filter((p) => p.callable && p.tappable !== false && p.nr !== 10)
+      .map((p) => p.nr)
+      .sort((a, b) => a - b);
+    for (const bad of [7, 12, 10]) {
+      if (listNrs.includes(bad)) throw new Error(`addressbook must not list #${bad}`);
+    }
+    if (JSON.stringify([...listNrs].sort((a, b) => a - b)) !== JSON.stringify(expectNrs)) {
+      throw new Error("addressbook people mismatch: " + listNrs.join(","));
+    }
+    if (!listNrs.includes(21)) throw new Error("Hannah (#21) must be in the addressbook");
+    const rowName = (await hanna.locator('#ab-list .ab-row[data-nr="22"] .ab-name').innerText()).trim();
+    if (rowName !== "Daniel") throw new Error("addressbook row #22 name: " + rowName);
+    await hanna.waitForTimeout(300);
+    await shot(hanna, "hanna-adressbuch.jpg");
+    // "Zum Foto" closes the list and brings the Adressbuch button back.
+    await hanna.locator("#btn-ab-close").click();
+    await hanna.locator("#screen-addressbook").waitFor({ state: "hidden", timeout: 5000 });
+    await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 5000 });
+    results.push("addressbook host-only list (" + listNrs.length + " callable, no 7/12/10)");
+
     // Let both Daniel devices finish connecting before the call.
     await daniel.waitForTimeout(800);
     await danielB.waitForTimeout(200);
+
+    // Anrufen from the address book rings Daniel exactly like a call from the photo.
+    await hanna.locator("#btn-addressbook").click();
+    await hanna.locator('#ab-list .ab-call[data-nr="22"]').click();
+    await hanna.locator("#screen-call").waitFor({ state: "visible", timeout: 10000 });
+    await assertHidden(hanna, "#screen-addressbook", "call started");
+    const waitText = (await hanna.locator("#call-status").innerText()).trim();
+    if (!waitText.includes("Daniel")) throw new Error("call status should name Daniel: " + waitText);
+    await daniel.locator("#screen-incoming").waitFor({ state: "visible", timeout: 15000 });
+    await danielB.locator("#screen-incoming").waitFor({ state: "visible", timeout: 15000 });
+    await hanna.locator("#btn-hangup").click();
+    await hanna.locator("#screen-photo").waitFor({ state: "visible", timeout: 10000 });
+    await daniel.locator("#screen-standby").waitFor({ state: "visible", timeout: 10000 });
+    await danielB.locator("#screen-standby").waitFor({ state: "visible", timeout: 10000 });
+    await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 5000 });
+    results.push("addressbook Anrufen rings both Daniel devices");
+    await daniel.waitForTimeout(600);
 
     // Host calls Daniel — both of Daniel's devices must ring.
     await tapPerson(hanna, 22);
@@ -491,6 +553,36 @@ async function run() {
     await unzoom(hanna);
     results.push("zoomed outside tap unzooms");
 
+    // "Zurück zum Familienfoto": visible only while zoomed, never overlaps name/Anrufen.
+    await assertHidden(hanna, "#btn-back-photo", "not zoomed");
+    await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 5000 });
+    await zoomTo(hanna, 22, "Daniel");
+    await hanna.locator("#btn-back-photo").waitFor({ state: "visible", timeout: 5000 });
+    await assertHidden(hanna, "#btn-addressbook", "zoomed");
+    const backText = (await hanna.locator("#btn-back-photo").innerText()).replace(/\s+/g, " ").trim();
+    if (backText !== "Zurück zum Familienfoto") throw new Error("back label: " + backText);
+    const backBox = await hanna.locator("#btn-back-photo").boundingBox();
+    for (const sel of ["#btn-call", "#zoom-name"]) {
+      const b = await hanna.locator(sel).boundingBox();
+      if (boxesOverlap(backBox, b)) throw new Error(`Zurück overlaps ${sel}`);
+    }
+    await shot(hanna, "hanna-zoom-zurueck.jpg");
+    await hanna.locator("#btn-back-photo").click();
+    await hanna.waitForFunction(() => !document.getElementById("photo-stage")?.classList.contains("is-zoomed"), {
+      timeout: 5000,
+    });
+    await assertHidden(hanna, "#zoom-card", "after Zurück");
+    await assertHidden(hanna, "#btn-back-photo", "after Zurück");
+    await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 5000 });
+    // Outside tap still works as the second path.
+    await zoomTo(hanna, 23, "Melanie");
+    await hanna.locator("#photo-stage").click({ position: { x: 60, y: 300 }, force: true });
+    await hanna.waitForFunction(() => !document.getElementById("photo-stage")?.classList.contains("is-zoomed"), {
+      timeout: 5000,
+    });
+    await assertHidden(hanna, "#btn-back-photo", "after outside tap");
+    results.push("Zurück zum Familienfoto unzooms (button + outside tap)");
+
     // iPad orientation: photo must refit after portrait and back, and hits stay correct.
     async function cyclePad(page, land, port, tag) {
       await page.setViewportSize(land);
@@ -557,8 +649,8 @@ async function run() {
 
     // Structural push endpoint (no delivery assertion locally)
     const health = await fetch(HEALTH).then((r) => r.json());
-    if (!health.ok || health.version !== "V1.03") throw new Error("health/version");
-    results.push("worker health V1.03");
+    if (!health.ok || health.version !== "V1.04") throw new Error("health/version");
+    results.push("worker health V1.04");
 
     console.log("E2E OK:", results.join(", "));
     console.log("screenshots:", fs.readdirSync(shots).join(", "));
