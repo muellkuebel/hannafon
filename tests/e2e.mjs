@@ -1195,14 +1195,39 @@ async function run() {
         if (boxesOverlap(back, bar)) throw new Error("Zum Foto overlaps the group pill");
       }
       await shot(hanna, "v109-select.jpg");
-      // Zum Foto cancels and clears the choice.
+      // V1.10: in select mode the corner pill says "Abbrechen" (no heads icon),
+      // same cream pill in the same corner.
+      {
+        const txt = (await hanna.locator("#btn-back-photo").innerText()).replace(/\s+/g, " ").trim();
+        if (txt !== "Abbrechen") throw new Error("select mode corner pill must say Abbrechen, got " + txt);
+        if (await hanna.locator("#btn-back-photo .icon-heads").isVisible()) throw new Error("Abbrechen must not show the heads icon");
+        await assertCornerRight(hanna, "#btn-back-photo", "select mode Abbrechen");
+        const bg = await hanna.locator("#btn-back-photo").evaluate((el) => getComputedStyle(el).backgroundColor);
+        if (bg !== CREAM_RGB) throw new Error("Abbrechen must stay cream, got " + bg);
+      }
+      // Abbrechen cancels and restores the photo home.
       await hanna.locator("#btn-back-photo").click();
       await assertHidden(hanna, "#select-bar", "select cancelled");
       if ((await sel()) !== null) throw new Error("selection must be cleared");
       if ((await hanna.locator(".sel-ring").count()) !== 0) throw new Error("rings must be gone");
       if (!(await hanna.locator("#greeting-line1").innerText()).startsWith("Hallo")) throw new Error("greeting back");
       await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 3000 });
-      results.push("V1.09 zoom card Noch jemanden dazu, select mode toggle/max 3/names/Zum Foto cancel");
+      await assertHidden(hanna, "#btn-back-photo", "after Abbrechen");
+      await assertHidden(hanna, "#zoom-card", "after Abbrechen");
+      if (await hanna.evaluate(() => document.getElementById("photo-stage").classList.contains("is-zoomed") || document.getElementById("app").classList.contains("is-selecting"))) {
+        throw new Error("after Abbrechen: not zoomed, not selecting");
+      }
+      if (!(await hanna.locator("#screen-photo").isVisible())) throw new Error("after Abbrechen: photo home");
+      // Zoom card keeps "Zum Foto" with the heads icon.
+      await zoomTo(hanna, 1, "Maria");
+      {
+        const txt = (await hanna.locator("#btn-back-photo").innerText()).replace(/\s+/g, " ").trim();
+        if (txt !== "Zum Foto") throw new Error("zoom card corner pill must say Zum Foto, got " + txt);
+        if (!(await hanna.locator("#btn-back-photo .icon-heads").isVisible())) throw new Error("Zum Foto keeps the heads icon");
+      }
+      await hanna.locator("#btn-back-photo").click();
+      await assertHidden(hanna, "#zoom-card", "after Zum Foto (zoom)");
+      results.push("V1.09 zoom card Noch jemanden dazu, select mode toggle/max 3/names; V1.10 Abbrechen (no icon) restores home, zoom keeps Zum Foto");
 
       async function startGroup(nrs) {
         await zoomTo(hanna, nrs[0], null);
@@ -2071,8 +2096,8 @@ async function run() {
 
     // Structural push endpoint (no delivery assertion locally)
     const health = await fetch(HEALTH).then((r) => r.json());
-    if (!health.ok || health.version !== "V1.09") throw new Error("health/version");
-    results.push("worker health V1.09");
+    if (!health.ok || health.version !== "V1.10") throw new Error("health/version");
+    results.push("worker health V1.10");
 
     console.log("E2E OK:", results.join(", "));
     console.log("screenshots:", fs.readdirSync(shots).join(", "));

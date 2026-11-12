@@ -1151,3 +1151,7 @@ html.is-tablet #app {
   .call-grid { bottom: calc(20px + 64px + 14px + var(--safe-b)); }
   .incoming-sub { font-size: clamp(20px, 6vw, 28px); }
 }
+
+/* V1.10: select mode corner pill "Abbrechen": same cream pill and spot, no icon. */
+#btn-back-photo.is-cancel { padding: 6px 28px; }
+#btn-back-photo.is-cancel .icon-heads { display: none; }

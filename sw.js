@@ -1,5 +1,5 @@
-const VERSION = "V1.09";
-const CACHE = "hannafon-v1.09";
+const VERSION = "V1.10";
+const CACHE = "hannafon-v1.10";
 const SHELL = [
   "./",
   "./index.html",

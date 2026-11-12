@@ -1,6 +1,6 @@
 # Hannafon
 
-Lokale PWA für Familien-Videoanrufe (V1.09). Vanilla HTML, CSS und JavaScript.
+Lokale PWA für Familien-Videoanrufe (V1.10). Vanilla HTML, CSS und JavaScript.
 
 Live-Test (GitHub Pages + Cloudflare Worker):
 https://muellkuebel.github.io/hannafon/
@@ -26,7 +26,7 @@ npm run test:e2e
 
 ## Hinweise
 
-- Service-Worker-Cache: `hannafon-v1.09`
+- Service-Worker-Cache: `hannafon-v1.10`
 - Verstecktes Zurücksetzen: die obere rechte Ecke fünf Sekunden gedrückt halten (unsichtbare Fläche, seit V1.06 ohne sichtbaren Hannafon-Schriftzug; löscht auch den Familien-Code). Bei offenem Adressbuch nicht erreichbar.
 - Empfänger können unten auf Standby „Dieses Gerät trennen“ tippen: nur dieses Gerät, der Familien-Code bleibt
 - Mehrere Geräte pro Person: jedes Gerät hat eine eigene ID, ein Anruf klingelt überall, das erste Annehmen gewinnt
@@ -48,3 +48,4 @@ npm run test:e2e
 - Gruppenanruf, Ablauf: Jede eingeladene Person bekommt einen normalen Anruf von Hanna (Push, Wiederholung beim Öffnen, „Anderswo angenommen“ pro Person, verpasste Anrufe wie bisher). Beim Empfänger: Creme + App-Icon, „Hanna ruft an“ und darunter „mit Maria“ / „mit Maria und Daniel“. Im Gespräch: Kacheln (ganzes Bild, `contain`, schwarze Ränder, Vorname), wer noch nicht abgenommen hat, erscheint als Creme-Kachel mit Buchstabe und „klingelt…“. Ablehnen oder 60 s ohne Antwort: Kachel verschwindet, der Rest spricht weiter (ohne Antwort = verpasster Anruf, Ablehnen nicht). Hannas „Auflegen“ beendet für alle, ein Gast verlässt nur selbst.
 - Gruppenanruf, Technik: Mesh ohne Server-Medien, nur STUN (kein TURN). Hanna ↔ Gast über die normalen `call`/`answer`/`ice`; nimmt jemand an, schickt Hanna allen schon Verbundenen `peer-join`, und der schon verbundene Gast bietet dem Neuen an (`peer-offer`/`peer-answer`/`peer-ice`, keine Kollision). Hanna verteilt die Teilnehmerliste (`group-state`), ein Gast verlässt mit `hangup` an Hanna + `peer-leave` an die anderen. Der Worker leitet diese Nachrichten nur weiter (keine Speicherung) und meldet `declined`, wenn alle verbundenen Geräte einer Person abgelehnt haben.
 - Datenvolumen (V1.09): jedes Gerät begrenzt, was es sendet (`RTCRtpSender.setParameters`): Einzelanruf Video 1000 kbit/s, 24 fps, Audio 48 kbit/s → etwa 1,0 GB pro Stunde auf Hannas iPad (senden + empfangen). Gruppe mit 2 anderen: 600 kbit/s pro Strom (2 raus, 2 rein) → etwa 1,2 GB/h; mit 3 anderen: 450 kbit/s pro Strom → etwa 1,4 GB/h. Aufnahme bleibt 4:3 1280×960, nie beschnitten. Keine Einstellungsseite.
+- Auswahl für Gruppenanrufe (V1.10): unten rechts steht in der Auswahl „Abbrechen“ (Creme-Pille, ohne Köpfe-Symbol) statt „Zum Foto“. Abbrechen beendet die Auswahl, löscht sie und zeigt wieder das normale Familienfoto mit Begrüßung (nicht den Zoom der ersten Person). Im Zoom, im Adressbuch und bei „Verpasste Anrufe“ bleibt es „Zum Foto“.

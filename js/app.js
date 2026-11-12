@@ -199,6 +199,14 @@ function updateCornerButtons() {
     onPhoto && !bookOpen && !zoomed && !selecting && state.mode === "host" &&
     !!state.identity && isHostPerson(state.identity, state.config);
   show(ui.btnBackPhoto, canBack);
+  // V1.10: in group select mode the same corner pill reads "Abbrechen" (no
+  // three-heads icon) and restores the photo home; elsewhere "Zum Foto".
+  const cancelMode = selecting && !zoomed;
+  ui.btnBackPhoto.classList.toggle("is-cancel", cancelMode);
+  const backLabel = ui.btnBackPhoto.querySelector(".back-label");
+  const wantLabel = cancelMode ? "Abbrechen" : "Zum Foto";
+  if (backLabel && backLabel.textContent !== wantLabel) backLabel.textContent = wantLabel;
+  ui.btnBackPhoto.setAttribute("aria-label", wantLabel);
   show(ui.btnAddressbook, canBook);
   // V1.08: "Verpasste Anrufe" bottom left, only while calls are waiting.
   const missed = missedPeople();
@@ -1132,8 +1140,9 @@ ui.stage.addEventListener("click", onStageBackground);
 
 ui.btnBackPhoto.addEventListener("click", (ev) => {
   ev.stopPropagation();
-  // V1.09: in select mode "Zum Foto" cancels the group and clears the choice.
-  if (state.select) exitSelectMode();
+  // V1.10: "Abbrechen" in select mode: back to the plain photo home
+  // (selection cleared, nothing zoomed, normal greeting).
+  if (state.select) goHome();
   else if (state.zoomed) unzoom();
 });
 ui.btnAddMore.addEventListener("click", (ev) => {
