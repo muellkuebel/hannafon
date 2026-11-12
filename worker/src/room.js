@@ -24,6 +24,21 @@ export class HannafonRoom {
       )
     `);
     this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS devices_person ON devices(person_nr)`);
+    // V1.06: still-ringing offers, so a device that connects late (opened from
+    // the push notification, woke from background) still gets the call.
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS pending_calls (
+        from_nr INTEGER NOT NULL,
+        to_nr INTEGER NOT NULL,
+        from_device TEXT,
+        call_id TEXT,
+        payload TEXT NOT NULL,
+        ice TEXT NOT NULL DEFAULT '[]',
+        declined TEXT NOT NULL DEFAULT '[]',
+        created INTEGER NOT NULL,
+        PRIMARY KEY (from_nr, to_nr)
+      )
+    `);
 
     for (const ws of this.ctx.getWebSockets()) {
       const att = ws.deserializeAttachment() || {};
@@ -139,6 +154,12 @@ export class HannafonRoom {
       if (data.deviceId && data.deviceId !== att.deviceId) {
         ws.serializeAttachment({ personNr: from, deviceId: String(data.deviceId) });
       }
+      this.replayPending(ws, from, String(data.deviceId || att.deviceId || ""));
+      return;
+    }
+
+    if (data.type === "sync") {
+      this.replayPending(ws, from, fromDevice);
       return;
     }
 
@@ -147,6 +168,14 @@ export class HannafonRoom {
     if (data.type === "call") {
       const to = Number(data.to);
       if (!to) return;
+      // Glare / callback: the callee is already being called by `to`. Do not
+      // ring `to` back; hand the caller that ringing offer instead.
+      const reverse = this.getPending(to, from);
+      if (reverse) {
+        this.replayPending(ws, from, fromDevice, { onlyFrom: to, force: true });
+        return;
+      }
+      this.savePending(from, to, fromDevice, data.callId || null, payload);
       this.forwardToPerson(to, payload);
       await this.notifyPush(from, to, data.fromName || "");
       return;
@@ -155,6 +184,7 @@ export class HannafonRoom {
     if (data.type === "answer") {
       const to = Number(data.to);
       if (!to) return;
+      this.clearPending(to, from);
       if (data.toDevice) this.forwardToDevice(to, data.toDevice, payload);
       else this.forwardToPerson(to, payload);
       // First acceptor wins: tell the person's other devices to stop ringing.
@@ -165,6 +195,7 @@ export class HannafonRoom {
     if (data.type === "ice") {
       const to = Number(data.to);
       if (!to) return;
+      if (data.candidate) this.addPendingIce(from, to, data.candidate);
       if (data.toDevice) this.forwardToDevice(to, data.toDevice, payload);
       else this.forwardToPerson(to, payload);
       return;
@@ -173,19 +204,129 @@ export class HannafonRoom {
     if (data.type === "hangup") {
       const to = Number(data.to);
       if (!to) return;
+      this.clearPending(from, to);
       this.forwardToPerson(to, payload);
       return;
     }
 
-    // reject / local-decline stay on this device only — other devices keep ringing.
+    if (data.type === "reject") {
+      // Local decline stays on this device — other devices keep ringing — but
+      // this device must not get the offer replayed again.
+      const caller = Number(data.to);
+      if (caller && fromDevice) this.declinePending(caller, from, fromDevice);
+      return;
+    }
   }
 
   async webSocketClose(ws) {
+    this.dropPendingFromSocket(ws);
     this.remove(ws);
   }
 
   async webSocketError(ws) {
+    this.dropPendingFromSocket(ws);
     this.remove(ws);
+  }
+
+  // ---- V1.06 pending (still ringing) calls -------------------------------
+
+  static PENDING_TTL_MS = 300000; // caller must also still be connected
+
+  getPending(fromNr, toNr) {
+    const cutoff = Date.now() - HannafonRoom.PENDING_TTL_MS;
+    this.ctx.storage.sql.exec(`DELETE FROM pending_calls WHERE created < ?`, cutoff);
+    for (const row of this.ctx.storage.sql.exec(
+      `SELECT * FROM pending_calls WHERE from_nr = ? AND to_nr = ?`,
+      fromNr,
+      toNr
+    )) return row;
+    return null;
+  }
+
+  savePending(fromNr, toNr, fromDevice, callId, payload) {
+    const { candidate, ...clean } = payload;
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO pending_calls (from_nr, to_nr, from_device, call_id, payload, ice, declined, created)
+       VALUES (?, ?, ?, ?, ?, '[]', '[]', ?)`,
+      fromNr,
+      toNr,
+      fromDevice || "",
+      callId || "",
+      JSON.stringify(clean),
+      Date.now()
+    );
+  }
+
+  clearPending(fromNr, toNr) {
+    this.ctx.storage.sql.exec(`DELETE FROM pending_calls WHERE from_nr = ? AND to_nr = ?`, fromNr, toNr);
+  }
+
+  addPendingIce(fromNr, toNr, candidate) {
+    const row = this.getPending(fromNr, toNr);
+    if (!row) return;
+    let ice = [];
+    try { ice = JSON.parse(row.ice) || []; } catch { ice = []; }
+    if (ice.length >= 40) return;
+    ice.push(candidate);
+    this.ctx.storage.sql.exec(
+      `UPDATE pending_calls SET ice = ? WHERE from_nr = ? AND to_nr = ?`,
+      JSON.stringify(ice),
+      fromNr,
+      toNr
+    );
+  }
+
+  declinePending(fromNr, toNr, deviceId) {
+    const row = this.getPending(fromNr, toNr);
+    if (!row) return;
+    let declined = [];
+    try { declined = JSON.parse(row.declined) || []; } catch { declined = []; }
+    if (!declined.includes(deviceId)) declined.push(deviceId);
+    this.ctx.storage.sql.exec(
+      `UPDATE pending_calls SET declined = ? WHERE from_nr = ? AND to_nr = ?`,
+      JSON.stringify(declined),
+      fromNr,
+      toNr
+    );
+  }
+
+  // The caller's device went away: its offer can no longer be answered.
+  dropPendingFromSocket(ws) {
+    const att = this.att(ws);
+    const nr = Number(att.personNr) || 0;
+    const dev = att.deviceId || "";
+    if (!nr || !dev) return;
+    const others = [...(this.byPerson.get(nr) || [])].some((s) => s !== ws && (this.att(s).deviceId || "") === dev);
+    if (others) return;
+    this.ctx.storage.sql.exec(`DELETE FROM pending_calls WHERE from_nr = ? AND from_device = ?`, nr, dev);
+  }
+
+  replayPending(ws, personNr, deviceId, { onlyFrom = 0, force = false } = {}) {
+    if (!personNr) return 0;
+    const cutoff = Date.now() - HannafonRoom.PENDING_TTL_MS;
+    this.ctx.storage.sql.exec(`DELETE FROM pending_calls WHERE created < ?`, cutoff);
+    let n = 0;
+    for (const row of this.ctx.storage.sql.exec(`SELECT * FROM pending_calls WHERE to_nr = ?`, personNr)) {
+      if (onlyFrom && row.from_nr !== onlyFrom) continue;
+      let declined = [];
+      try { declined = JSON.parse(row.declined) || []; } catch { declined = []; }
+      if (!force && deviceId && declined.includes(deviceId)) continue;
+      let msg;
+      let ice = [];
+      try {
+        msg = JSON.parse(row.payload);
+        ice = JSON.parse(row.ice) || [];
+      } catch {
+        continue;
+      }
+      try {
+        ws.send(JSON.stringify({ ...msg, type: "call", replay: true, ice, age: Date.now() - row.created }));
+        n++;
+      } catch {
+        /* ignore */
+      }
+    }
+    return n;
   }
 
   forwardToPerson(to, msg, { exceptWs, exceptDevice } = {}) {

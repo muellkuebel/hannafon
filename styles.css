@@ -36,7 +36,8 @@
   /* Set by JS (V1.05): height iOS forgot to give a home-screen web app
      (status-bar-sized strip at the bottom). 0 everywhere else. */
   --ios-gap: 0px;
-  /* Set by JS (V1.05): colours of the photo rows touching the screen edges. */
+  /* Set by JS (V1.05): colours of the photo rows touching the screen edges
+     (page background only; the status bar is always black since V1.06). */
   --edge-top: var(--cream);
   --edge-bottom: var(--cream);
 }
@@ -44,6 +45,8 @@
 * { box-sizing: border-box; }
 html, body {
   margin: 0;
+  /* V1.06: no page pinch-zoom / double-tap zoom anywhere in the app. */
+  touch-action: pan-x pan-y;
   width: 100%;
   position: fixed;
   top: 0;
@@ -96,29 +99,22 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   z-index: 20;
 }
 #app.is-in-call .topbar { display: none; }
+/* V1.06: the visible "Hannafon" label is gone. The button stays as an
+   invisible, decent-sized hit area in the top-right corner for the hidden
+   5-second hold-to-reset (Daniel). No text, no background, no focus ring. */
 .wordmark {
-  background: none;
+  display: block;
+  width: 76px;
+  height: 56px;
+  background: transparent;
   border: 0;
-  padding: 8px 6px;
+  padding: 0;
   margin: 0;
-  font-family: "Fraunces", ui-serif, Georgia, serif;
-  font-style: italic;
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  opacity: 0.55;
-  color: var(--ink);
-  cursor: pointer;
-}
-#app.is-photo:not(.is-zoomed) .wordmark {
-  color: #F6EFE3;
-  opacity: 0.9;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
-}
-#app.is-photo.is-zoomed .wordmark {
-  color: var(--ink);
-  opacity: 0.9;
-  text-shadow: none;
+  opacity: 0;
+  color: transparent;
+  outline: none;
+  cursor: default;
+  -webkit-touch-callout: none;
 }
 
 .screen {
@@ -314,7 +310,7 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
 }
 .photo-stage.is-zoomed #photo-blur-fill { opacity: 1; }
 /* V1.05: no dark gradient over the top of the family photo any more. The
-   greeting and wordmark carry their own text-shadow. */
+   greeting carries its own text-shadow. */
 .photo-stack {
   position: absolute;
   transform-origin: 0 0;
@@ -334,6 +330,22 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   transition: opacity 0.55s ease;
 }
 .photo-stage.is-zoomed #photo-blur { opacity: 1; }
+/* V1.06: mirrored blurred continuation around the photo (zoomed only). */
+.photo-extend {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.55s ease;
+}
+.photo-extend img {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: fill;
+}
+.photo-stage.is-zoomed .photo-extend { opacity: 1; }
 #photo-sharp.is-masked {
   /* mask set in JS */
 }
@@ -362,10 +374,14 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
 }
 .photo-stage.is-zoomed .halo { opacity: 0; }
 
+/* V1.06: greeting sits top-right, right-aligned (the photo is calmer there). */
 .greeting {
   position: absolute;
   top: calc(28px + var(--safe-t));
-  left: calc(28px + var(--safe-l));
+  right: calc(28px + var(--safe-r));
+  left: auto;
+  max-width: calc(50% - 28px);
+  text-align: right;
   z-index: 4;
   pointer-events: none;
   transition: opacity 0.45s ease;
@@ -433,8 +449,8 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   color: var(--ink);
 }
 
-/* V1.04: bottom-left corner pills (Adressbuch on the host overview,
-   "Zurück zum Familienfoto" while zoomed). Cream, a bit smaller than Anrufen. */
+/* V1.04/V1.06: bottom-right corner pill: Adressbuch on the host overview,
+   "Zum Foto" while zoomed and in the list. Cream, a bit smaller than Anrufen. */
 .pill-cream {
   background: var(--cream);
   color: var(--ink);
@@ -454,20 +470,27 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   line-height: 1.12;
   text-align: left;
 }
+/* V1.06: Adressbuch (overview) and Zum Foto (list) share the bottom-right spot. */
+.corner-pill-right {
+  left: auto;
+  right: calc(22px + var(--safe-r));
+}
 .corner-pill .icon-book { width: 28px; height: 28px; flex: 0 0 auto; }
 .pill .icon-heads { width: 36px; height: 29px; flex: 0 0 auto; }
 .icon-heads .heads-front { stroke: var(--cream); }
 .back-label > span { display: inline-block; white-space: nowrap; }
 
-/* Zoomed with the back pill: name + Anrufen move to the right so the two never collide. */
+/* V1.06: zoomed, name + Anrufen stay centred; "Zum Foto" sits bottom-right.
+   The card is kept narrower than the gap between the two corner zones. */
 #app.has-back-pill .zoom-card {
-  left: auto;
-  right: calc(22px + var(--safe-r));
-  transform: none;
-  width: auto;
-  max-width: calc(52% - 44px);
-  align-items: flex-end;
-  text-align: right;
+  width: min(520px, calc(100% - 2 * (22px + 200px + 16px)));
+}
+/* Narrower screens (iPad portrait): lift name + Anrufen above the pill. */
+@media (max-width: 960px) {
+  #app.has-back-pill .zoom-card {
+    width: min(90vw, 520px);
+    bottom: calc(33px + 62px + 18px + var(--safe-b));
+  }
 }
 
 /* Adressbuch: calm list, three columns on iPad landscape. */
@@ -493,17 +516,13 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   font-size: clamp(28px, 3.2vw, 36px);
   line-height: 1.1;
 }
-.ab-close {
-  min-height: 56px;
-  padding: 0 22px 0 16px;
-  font-size: 20px;
-  gap: 10px;
-}
+/* .ab-close is a .corner-pill.corner-pill-right (same spot as Adressbuch). */
 .ab-list {
   flex: 1 1 auto;
   min-height: 0;
   margin: 0;
-  padding: 4px 2px calc(24px + var(--safe-b));
+  /* room for the bottom-right Zum Foto pill so the last rows stay reachable */
+  padding: 4px 2px calc(33px + 62px + 20px + var(--safe-b));
   list-style: none;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -688,6 +707,8 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   max-width: 22em;
   color: var(--ink);
 }
+/* V1.06: opened from a call notification, offer on its way: no callback button. */
+#app.is-expecting-call #btn-call-host { opacity: 0.45; pointer-events: none; }
 .taken-toast {
   position: absolute;
   left: 50%;
@@ -715,11 +736,6 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
 @media (orientation: portrait) {
   /* When the whole group is visible (cream letterbox), use dark ink chrome.
      Height-covering / panned view keeps the cream-on-photo treatment. */
-  #app.is-photo:not(.is-zoomed).is-letterboxed .wordmark {
-    color: var(--ink);
-    opacity: 0.55;
-    text-shadow: none;
-  }
   #app.is-photo:not(.is-zoomed).is-letterboxed .greeting p,
   #app.is-photo:not(.is-zoomed).is-letterboxed .setup-title h1 {
     color: var(--ink);
@@ -732,7 +748,9 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   }
   .greeting {
     top: calc(48px + var(--safe-t));
-    left: calc(18px + var(--safe-l));
+    right: calc(18px + var(--safe-r));
+    left: auto;
+    max-width: calc(100% - 36px);
   }
 }
 
@@ -773,6 +791,12 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
     padding: 4px 18px 4px 14px;
     font-size: 18px;
   }
+  .corner-pill-right {
+    left: auto;
+    right: calc(14px + var(--safe-r));
+    max-width: calc(100% - 28px);
+  }
+  .ab-list { padding-bottom: calc(18px + 52px + 18px + var(--safe-b)); }
   .pill .icon-heads { width: 30px; height: 24px; }
   .corner-pill .icon-book { width: 24px; height: 24px; }
   /* Phones: keep name + button centered but lift them above the back pill. */

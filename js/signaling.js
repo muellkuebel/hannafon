@@ -56,6 +56,17 @@ export class Signaling {
     });
   }
 
+  // V1.06: iOS often leaves a suspended socket looking OPEN but dead. Reopen
+  // it (the Worker replays any still-ringing offer on "hello").
+  reconnect() {
+    if (!this.wanted) return;
+    this._open();
+  }
+
+  isOpen() {
+    return !!(this.ws && this.ws.readyState === WebSocket.OPEN);
+  }
+
   send(msg) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));

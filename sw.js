@@ -1,5 +1,5 @@
-const VERSION = "V1.05";
-const CACHE = "hannafon-v1.05";
+const VERSION = "V1.06";
+const CACHE = "hannafon-v1.06";
 const SHELL = [
   "./",
   "./index.html",
@@ -18,6 +18,8 @@ const SHELL = [
   "./icons/favicon-32.png",
   "./icons/favicon.ico",
   "./icons/family-heads.svg",
+  "./sounds/ringtone.m4a",
+  "./sounds/keepalive.m4a",
   "./fonts/Fraunces-Variable.ttf",
   "./fonts/Fraunces-Italic-Variable.ttf",
   "./fonts/Nunito-Variable.ttf",
@@ -85,11 +87,13 @@ self.addEventListener("notificationclick", (event) => {
       for (const client of all) {
         const href = client.url || "";
         if (href.includes("/hannafon") && "focus" in client) {
-          try { client.postMessage({ type: "incoming", data }); } catch { /* ignore */ }
-          if ("navigate" in client) {
-            try { await client.navigate(target); } catch { /* ignore */ }
-          }
-          return client.focus();
+          // V1.06: no navigate/reload (that dropped the live socket and the
+          // offer). Focus, then tell the page; it reconnects and the Worker
+          // replays the still-ringing call so Annehmen appears.
+          let focused = client;
+          try { focused = (await client.focus()) || client; } catch { /* ignore */ }
+          try { focused.postMessage({ type: "incoming", data }); } catch { /* ignore */ }
+          return focused;
         }
       }
       if (clients.openWindow) return clients.openWindow(target);

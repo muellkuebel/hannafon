@@ -246,7 +246,8 @@ function hexToRgb(hex) {
   return m ? `rgb(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)})` : null;
 }
 
-// V1.05: no dark gradient on the photo; status bar colour and page edge follow the photo.
+// V1.05: no dark gradient on the photo; page edge follows the photo.
+// V1.06: status bar is solid black ("black" style, theme-color #000000), never photo-tinted.
 async function assertTopClean(page, label) {
   if ((await page.locator("#topfade, .topfade").count()) !== 0) {
     throw new Error(label + ": .topfade gradient must be gone");
@@ -270,12 +271,11 @@ async function assertTopClean(page, label) {
     }
     return { edge, meta, status, htmlBg, overlays };
   });
-  if (info.status !== "default") throw new Error(label + ": status bar style must be default, got " + info.status);
+  if (info.status !== "black") throw new Error(label + ": status bar style must be black, got " + info.status);
   if (info.overlays.length) throw new Error(label + ": overlay over top of photo: " + info.overlays.join(","));
-  if (!info.edge.top || info.meta !== info.edge.top) {
-    throw new Error(label + ": theme-color should follow the photo top edge " + JSON.stringify(info));
+  if (String(info.meta).toLowerCase() !== "#000000") {
+    throw new Error(label + ": theme-color must stay black " + JSON.stringify(info));
   }
-  if (hexToRgb(info.edge.top) === CREAM_RGB) throw new Error(label + ": theme-color still cream on the photo");
   if (info.htmlBg !== hexToRgb(info.edge.bottom) || info.htmlBg === CREAM_RGB) {
     throw new Error(label + ": html background should be the photo bottom edge colour " + JSON.stringify(info));
   }
@@ -336,6 +336,106 @@ async function assertLandscapeFullBleed(page, viewport, tag, sim) {
     await page.evaluate(() => window.__hannafonTest.resetNav());
   }
   return geo;
+}
+
+// V1.06: every zoomed face lands at the horizontal centre (and 28% height),
+// edge faces included (mirrored blurred extension, no cream gap).
+async function assertZoomCentered(page, p, tag, logArr) {
+  const info = await page.evaluate((nr) => {
+    const t = window.__hannafonTest;
+    const pt = t.facePoint(nr);
+    const st = document.getElementById("photo-stage").getBoundingClientRect();
+    const ext = document.getElementById("photo-extend");
+    const imgs = [...ext.querySelectorAll("img")];
+    return {
+      pt, w: st.width, h: st.height, left: st.left, top: st.top,
+      cov: t.photoCoverage(),
+      extOpacity: getComputedStyle(ext).opacity,
+      extReady: imgs.length === 8 && imgs.every((i) => i.complete && i.naturalWidth > 0),
+    };
+  }, p.nr);
+  const cx = info.left + info.w / 2;
+  const cy = info.top + info.h * 0.28;
+  if (!info.pt || Math.abs(info.pt.x - cx) > 2 || Math.abs(info.pt.y - cy) > 2) {
+    throw new Error(`${tag}: #${p.nr} not centred when zoomed ${JSON.stringify({ pt: info.pt, cx, cy })}`);
+  }
+  if (!info.cov.covers) {
+    // Past the real photo edge: the mirrored extension must be there and visible.
+    if (!info.extReady || Number(info.extOpacity) < 0.99) {
+      throw new Error(`${tag}: #${p.nr} past the photo edge without extension ${JSON.stringify(info)}`);
+    }
+    logArr?.push(`#${p.nr}`);
+  }
+}
+
+// V1.06: greeting top-right, right-aligned, clear of the right edge (safe area).
+async function assertGreetingRight(page, label) {
+  const g = await page.evaluate(() => {
+    const el = document.getElementById("greeting");
+    const r = el.getBoundingClientRect();
+    const l1 = document.getElementById("greeting-line1").getBoundingClientRect();
+    const l2 = document.getElementById("greeting-line2").getBoundingClientRect();
+    return {
+      text: el.innerText,
+      align: getComputedStyle(el).textAlign,
+      right: r.right, left: r.left, top: r.top,
+      l1r: l1.right, l2r: l2.right, w: window.innerWidth,
+    };
+  });
+  if (!/^Hallo Hanna,/.test(g.text) || !g.text.includes("wen willst du anrufen?")) {
+    throw new Error(label + ": greeting text " + JSON.stringify(g.text));
+  }
+  if (g.align !== "right") throw new Error(label + ": greeting must be right-aligned");
+  if (g.left < g.w / 2 - 1) throw new Error(label + ": greeting must sit on the right half " + JSON.stringify(g));
+  if (g.right > g.w - 10 || g.right < g.w - 60) throw new Error(label + ": greeting right edge " + JSON.stringify(g));
+  if (Math.abs(g.l1r - g.l2r) > 2) throw new Error(label + ": greeting lines not right-aligned " + JSON.stringify(g));
+}
+
+// V1.06: host corner pill bottom-right (Adressbuch; Zum Foto shares the spot).
+async function assertCornerRight(page, sel, label) {
+  const b = await page.locator(sel).boundingBox();
+  const vp = page.viewportSize();
+  if (!b || b.x < vp.width / 2 || Math.abs(b.x + b.width - (vp.width - 22)) > 2 || b.y + b.height < vp.height - 120) {
+    throw new Error(`${label}: ${sel} must sit bottom-right ${JSON.stringify(b)}`);
+  }
+}
+
+// V1.06: no pinch on iPad. Synthetic two-finger pointer pinch + ctrl-wheel on the
+// stage must not change the photo scale. (Headless Chromium cannot reproduce iOS
+// Safari's native page pinch; viewport meta / gesturestart handling is checked by
+// attribute and listener presence only.)
+async function assertNoPinch(page, label) {
+  if (await page.evaluate(() => window.__hannafonTest.pinchAllowed())) {
+    throw new Error(label + ": pinch must be off on iPad");
+  }
+  const before = await page.evaluate(() => window.__hannafonTest.photoScale());
+  await page.evaluate(() => {
+    const st = document.getElementById("photo-stage");
+    const r = st.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const ev = (type, id, x, y) =>
+      st.dispatchEvent(new PointerEvent(type, { pointerId: id, clientX: x, clientY: y, bubbles: true, pointerType: "touch", isPrimary: id === 1 }));
+    ev("pointerdown", 1, cx - 40, cy);
+    ev("pointerdown", 2, cx + 40, cy);
+    for (let i = 1; i <= 8; i++) {
+      ev("pointermove", 1, cx - 40 - i * 25, cy);
+      ev("pointermove", 2, cx + 40 + i * 25, cy);
+    }
+    ev("pointerup", 1, cx - 240, cy);
+    ev("pointerup", 2, cx + 240, cy);
+    for (let i = 0; i < 6; i++) {
+      st.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, ctrlKey: true, clientX: cx, clientY: cy, bubbles: true, cancelable: true }));
+    }
+  });
+  await page.waitForTimeout(150);
+  const after = await page.evaluate(() => window.__hannafonTest.photoScale());
+  if (Math.abs(after.s - before.s) > 1e-6 || Math.abs(after.tx - before.tx) > 0.5 || Math.abs(after.ty - before.ty) > 0.5 || after.navUser) {
+    throw new Error(label + ": pinch changed the photo " + JSON.stringify({ before, after }));
+  }
+  const vp = await page.evaluate(() => document.querySelector('meta[name="viewport"]').content);
+  if (!/maximum-scale=1/.test(vp) || !/user-scalable=no/.test(vp)) throw new Error(label + ": viewport must block page zoom");
+  const ta = await page.evaluate(() => getComputedStyle(document.documentElement).touchAction);
+  if (ta !== "pan-x pan-y") throw new Error(label + ": html touch-action " + ta);
 }
 
 async function mediaContext(browser, { grant = false, permState = null, denyGum = false } = {}) {
@@ -505,7 +605,10 @@ async function run() {
     await hanna.waitForTimeout(400);
     await shot(hanna, "hanna-home.jpg");
     await assertTopClean(hanna, "hanna home 1180x820");
-    results.push("no topfade, opaque status bar tinted from photo");
+    await assertGreetingRight(hanna, "hanna home 1180x820");
+    await assertCornerRight(hanna, "#btn-addressbook", "hanna home 1180x820");
+    await assertNoPinch(hanna, "ipad-10 landscape");
+    results.push("no topfade, black status bar, greeting right, Adressbuch bottom-right, no pinch");
 
     if ((await hanna.locator("i.halo").count()) < 20) {
       throw new Error("expected discreet halos on tappable people");
@@ -513,8 +616,10 @@ async function run() {
 
     // Zoom every tappable person and screenshot (no black edges, soft silhouette).
     const people = loadPeople().filter((p) => p.tappable !== false);
+    const centerLog = [];
     for (const p of people) {
       await zoomTo(hanna, p.nr, p.name);
+      await assertZoomCentered(hanna, p, "ipad-10", centerLog);
       const file = `zoom-${p.nr}-${slug(p.name)}.jpg`;
       await shot(hanna, file);
       if (p.nr === 22) await shot(hanna, "hanna-zoom-call.jpg");
@@ -523,7 +628,7 @@ async function run() {
       await unzoom(hanna);
       process.stdout.write(`zoomed ${p.nr} ${p.name}\n`);
     }
-    results.push("zoom gallery " + people.length);
+    results.push("zoom gallery " + people.length + " (every face centred; edges " + centerLog.join(" ") + ")");
 
     // Adressbuch: host only, overview only, callable people only.
     await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 8000 });
@@ -531,6 +636,7 @@ async function run() {
     const bookLabel = (await hanna.locator("#btn-addressbook").innerText()).trim();
     if (bookLabel !== "Adressbuch") throw new Error("addressbook label: " + bookLabel);
     await shot(hanna, "hanna-overview-adressbuch.jpg");
+    const bookBox = await hanna.locator("#btn-addressbook").boundingBox();
     await hanna.locator("#btn-addressbook").click();
     await hanna.locator("#screen-addressbook").waitFor({ state: "visible", timeout: 5000 });
     await assertHidden(hanna, "#btn-addressbook", "list is open");
@@ -551,6 +657,29 @@ async function run() {
     await hanna.waitForTimeout(300);
     await shot(hanna, "hanna-adressbuch.jpg");
     // "Zum Foto" closes the list and brings the Adressbuch button back.
+    {
+      const a = await hanna.locator("#btn-ab-close").boundingBox();
+      const vp = hanna.viewportSize();
+      if (!a || Math.abs(a.x + a.width - (vp.width - 22)) > 2 || a.y + a.height < vp.height - 140) {
+        throw new Error("Zum Foto must sit bottom-right: " + JSON.stringify(a));
+      }
+      // Same spot as the Adressbuch pill (right edge and bottom edge).
+      if (bookBox && (Math.abs(bookBox.x + bookBox.width - (a.x + a.width)) > 2 || Math.abs(bookBox.y + bookBox.height - (a.y + a.height)) > 2)) {
+        throw new Error("Zum Foto and Adressbuch must share the corner " + JSON.stringify({ a, bookBox }));
+      }
+      // Scrolled to the end, the last row is not hidden under the pill.
+      await hanna.$eval("#ab-list", (el) => { el.scrollTop = el.scrollHeight; });
+      await hanna.waitForTimeout(150);
+      const overlap = await hanna.evaluate(() => {
+        const pill = document.getElementById("btn-ab-close").getBoundingClientRect();
+        return [...document.querySelectorAll("#ab-list .ab-row .ab-call")].some((b) => {
+          const r = b.getBoundingClientRect();
+          return r.right > pill.left && r.left < pill.right && r.bottom > pill.top && r.top < pill.bottom;
+        });
+      });
+      if (overlap) throw new Error("Zum Foto overlaps an Anrufen button at the end of the list");
+      await hanna.$eval("#ab-list", (el) => { el.scrollTop = 0; });
+    }
     await hanna.locator("#btn-ab-close").click();
     await hanna.locator("#screen-addressbook").waitFor({ state: "hidden", timeout: 5000 });
     await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 5000 });
@@ -693,26 +822,34 @@ async function run() {
     await unzoom(hanna);
     results.push("zoomed outside tap unzooms");
 
-    // "Zurück zum Familienfoto": visible only while zoomed, never overlaps name/Anrufen.
+    // "Zum Foto" (V1.06): visible only while zoomed, bottom-right (same spot as
+    // Adressbuch), name + Anrufen centred, no overlap.
     await assertHidden(hanna, "#btn-back-photo", "not zoomed");
     await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 5000 });
     await zoomTo(hanna, 22, "Daniel");
     await hanna.locator("#btn-back-photo").waitFor({ state: "visible", timeout: 5000 });
     await assertHidden(hanna, "#btn-addressbook", "zoomed");
     const backText = (await hanna.locator("#btn-back-photo").innerText()).replace(/\s+/g, " ").trim();
-    if (backText !== "Zurück zum Familienfoto") throw new Error("back label: " + backText);
+    if (backText !== "Zum Foto") throw new Error("back label: " + backText);
+    await assertCornerRight(hanna, "#btn-back-photo", "zoomed");
     const backBox = await hanna.locator("#btn-back-photo").boundingBox();
+    if (bookBox && (Math.abs(bookBox.x + bookBox.width - (backBox.x + backBox.width)) > 2 || Math.abs(bookBox.y + bookBox.height - (backBox.y + backBox.height)) > 2)) {
+      throw new Error("Zum Foto (zoom) must share the Adressbuch corner");
+    }
+    const vpW = hanna.viewportSize().width;
     for (const sel of ["#btn-call", "#zoom-name"]) {
       const b = await hanna.locator(sel).boundingBox();
-      if (boxesOverlap(backBox, b)) throw new Error(`Zurück overlaps ${sel}`);
+      if (boxesOverlap(backBox, b)) throw new Error(`Zum Foto overlaps ${sel}`);
+      if (Math.abs(b.x + b.width / 2 - vpW / 2) > 3) throw new Error(`${sel} must be centred: ${JSON.stringify(b)}`);
     }
     await shot(hanna, "hanna-zoom-zurueck.jpg");
     await hanna.locator("#btn-back-photo").click();
     await hanna.waitForFunction(() => !document.getElementById("photo-stage")?.classList.contains("is-zoomed"), {
       timeout: 5000,
     });
-    await assertHidden(hanna, "#zoom-card", "after Zurück");
-    await assertHidden(hanna, "#btn-back-photo", "after Zurück");
+    await assertHidden(hanna, "#zoom-card", "after Zum Foto");
+    await assertHidden(hanna, "#btn-back-photo", "after Zum Foto");
+    await assertCoverage(hanna, "after Zum Foto: full-bleed again");
     await hanna.locator("#btn-addressbook").waitFor({ state: "visible", timeout: 5000 });
     // Outside tap still works as the second path.
     await zoomTo(hanna, 23, "Melanie");
@@ -721,13 +858,14 @@ async function run() {
       timeout: 5000,
     });
     await assertHidden(hanna, "#btn-back-photo", "after outside tap");
-    results.push("Zurück zum Familienfoto unzooms (button + outside tap)");
+    results.push("Zum Foto bottom-right unzooms (button + outside tap), name+Anrufen centred");
 
     // iPad orientation: photo must refit after portrait and back, and hits stay correct.
     async function cyclePad(page, land, port, tag) {
       await page.setViewportSize(land);
       await page.evaluate(() => window.__hannafonTest.resetNav());
       await assertCoverage(page, tag + " landscape-1");
+      await assertNoPinch(page, tag + " landscape");
       await tapFaceCenter(page, 22);
       await page.locator("#zoom-name").waitFor({ state: "visible", timeout: 8000 });
       if ((await page.locator("#zoom-name").innerText()).trim() !== "Daniel") {
@@ -736,7 +874,7 @@ async function run() {
       await unzoom(page);
       await page.setViewportSize(port);
       await page.waitForTimeout(400);
-      await assertCoverage(page, tag + " portrait");
+      await assertNoPinch(page, tag + " portrait");
       await tapFaceCenter(page, 23);
       await page.locator("#zoom-name").waitFor({ state: "visible", timeout: 8000 });
       if ((await page.locator("#zoom-name").innerText()).trim() !== "Melanie") {
@@ -784,8 +922,191 @@ async function run() {
     if (audioState !== "running") {
       throw new Error("AudioContext should be running when ringing after a tap, got " + audioState);
     }
+    {
+      const dbg = await hanna.evaluate(() => window.__hannafonTest.audioDebug());
+      if (!dbg.ringSrc.includes("sounds/ringtone.m4a")) throw new Error("ringtone element src " + dbg.ringSrc);
+      if (!dbg.log.some((l) => l.ev === "ring-file-play" || l.ev === "ring-file-blocked")) {
+        throw new Error("startRingtone must attempt the ringtone <audio>: " + JSON.stringify(dbg.log));
+      }
+      if (!dbg.ringFilePlaying || dbg.ringPaused) throw new Error("ringtone file should play after a tap " + JSON.stringify(dbg));
+      if (!dbg.keepAlive) throw new Error("keep-alive should run after a tap " + JSON.stringify(dbg));
+      if (dbg.toneLoop) throw new Error("chord fallback should not run while the file plays");
+    }
     await hanna.evaluate(() => window.__hannafonTest.stopRingtone());
-    results.push("ringtone context running after tap");
+    {
+      const dbg = await hanna.evaluate(() => window.__hannafonTest.audioDebug());
+      if (dbg.ringFilePlaying || !dbg.ringPaused || dbg.toneLoop || dbg.ringing) {
+        throw new Error("stopRingtone must stop the ringtone file and chord " + JSON.stringify(dbg));
+      }
+      if (!dbg.keepAlive) throw new Error("keep-alive should survive stopRingtone");
+    }
+    // Later call without a fresh tap: rings through the kept-alive session.
+    await hanna.waitForTimeout(1500);
+    await hanna.evaluate(() => window.__hannafonTest.startRingtone());
+    {
+      const dbg = await hanna.evaluate(() => window.__hannafonTest.audioDebug());
+      if (!dbg.ringFilePlaying) throw new Error("ring without a new tap should play the file " + JSON.stringify(dbg));
+    }
+    await hanna.evaluate(() => window.__hannafonTest.stopRingtone());
+    results.push("ringtone: file plays after tap, keep-alive runs, stop stops, re-ring without tap");
+
+    // Host incoming path: Daniel calls Hanna; Hanna rings via startRingtone
+    // (file through the kept-alive session, no tap on the incoming screen).
+    {
+      const callerCtx = await phoneContext(browser, iphone14);
+      const caller = await callerCtx.newPage();
+      await enterCode(caller);
+      await identify(caller, 22);
+      await caller.locator("#screen-standby").waitFor({ state: "visible", timeout: 10000 });
+      await caller.waitForTimeout(800);
+      await caller.locator("#btn-call-host").click();
+      try {
+        await hanna.locator("#screen-incoming").waitFor({ state: "visible", timeout: 15000 });
+      } catch (e) {
+        const dbgH = await hanna.evaluate(() => ({ screens: [...document.querySelectorAll("section")].filter((x) => !x.hidden).map((x) => x.id) }));
+        const dbgC = await caller.evaluate(() => ({ screens: [...document.querySelectorAll("section")].filter((x) => !x.hidden).map((x) => x.id), status: document.getElementById("call-status")?.textContent }));
+        console.log("DEBUG", JSON.stringify({ dbgH, dbgC }));
+        throw e;
+      }
+      await hanna.waitForTimeout(500);
+      const dbg = await hanna.evaluate(() => window.__hannafonTest.audioDebug());
+      if (!dbg.ringing || !dbg.log.some((l) => /^ring:/.test(l.ev))) throw new Error("host incoming must call startRingtone " + JSON.stringify(dbg));
+      if (!dbg.ringFilePlaying) throw new Error("host should hear the ringtone file without a new tap " + JSON.stringify(dbg));
+      await assertHidden(hanna, "#ring-hint", "ring audible, no hint");
+      await hanna.locator("#btn-decline").click();
+      await hanna.locator("#screen-photo").waitFor({ state: "visible", timeout: 10000 });
+      const after = await hanna.evaluate(() => window.__hannafonTest.audioDebug());
+      if (after.ringing || after.ringFilePlaying) throw new Error("decline must stop the ring " + JSON.stringify(after));
+      if (await caller.locator("#btn-hangup").isVisible().catch(() => false)) await caller.locator("#btn-hangup").click();
+      await caller.locator("#screen-standby").waitFor({ state: "visible", timeout: 15000 });
+      await openDisconnectDialog(caller);
+      await confirmDisconnect(caller);
+      await caller.close();
+      await callerCtx.close();
+      results.push("host incoming rings (file), decline stops it");
+    }
+
+    // Hidden reset: no visible label, but holding the top-right corner 5 s opens the sheet.
+    {
+      const wm = hanna.locator("#wordmark");
+      const txt = (await wm.innerText()).trim();
+      if (txt) throw new Error("wordmark must have no visible text: " + txt);
+      const box = await wm.boundingBox();
+      const vp = hanna.viewportSize();
+      if (!box || box.width < 60 || box.height < 44 || box.x + box.width < vp.width - 40 || box.y > 30) {
+        throw new Error("reset hit area must stay in the top-right corner " + JSON.stringify(box));
+      }
+      const op = await wm.evaluate((el) => getComputedStyle(el).opacity);
+      if (Number(op) !== 0) throw new Error("reset hit area must be invisible");
+      await hanna.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await hanna.mouse.down();
+      await hanna.waitForTimeout(5300);
+      await hanna.mouse.up();
+      await hanna.locator("#reset-sheet").waitFor({ state: "visible", timeout: 2000 });
+      await hanna.locator("#btn-reset-cancel").click();
+      await hanna.locator("#reset-sheet").waitFor({ state: "hidden", timeout: 2000 });
+      // With the address book open, the hold target is gone (safety).
+      await hanna.locator("#btn-addressbook").click();
+      await hanna.locator("#screen-addressbook").waitFor({ state: "visible", timeout: 5000 });
+      await assertHidden(hanna, "#wordmark", "address book open");
+      await hanna.locator("#btn-ab-close").click();
+      await hanna.locator("#screen-addressbook").waitFor({ state: "hidden", timeout: 5000 });
+      results.push("hidden 5 s reset still works on invisible corner");
+    }
+
+    // V1.06 bug fix: Hanna calls, the receiver opens the app from the push.
+    {
+      const rxCtx = await phoneContext(browser, iphone14);
+      const rx = await rxCtx.newPage();
+      await enterCode(rx);
+      await identify(rx, 22);
+      await rx.locator("#screen-standby").waitFor({ state: "visible", timeout: 10000 });
+      await rx.waitForTimeout(800);
+      const hannaCallsDaniel = async () => {
+        await tapPerson(hanna, 22);
+        await hanna.locator("#btn-call").waitFor({ state: "visible", timeout: 8000 });
+        await hanna.waitForTimeout(600);
+        await hanna.locator("#btn-call").click();
+        await hanna.locator("#screen-call").waitFor({ state: "visible", timeout: 10000 });
+        await hanna.waitForTimeout(1200); // offer + ICE sent while the phone is "away"
+      };
+      const hannaHangsUp = async () => {
+        await hanna.locator("#btn-hangup").click();
+        await hanna.locator("#screen-photo").waitFor({ state: "visible", timeout: 10000 });
+      };
+
+      // a) Cold start from the notification: the phone's socket was gone when
+      //    Hanna's offer went out; the app opens at ?incoming=10.
+      await rx.evaluate(() => window.__hannafonTest.dropSocket());
+      await hannaCallsDaniel();
+      await rx.goto(APP + "?incoming=10", { waitUntil: "load" });
+      await rx.locator("#screen-incoming").waitFor({ state: "visible", timeout: 12000 });
+      await rx.locator("#btn-accept").waitFor({ state: "visible", timeout: 2000 });
+      if ((await rx.locator("#incoming-title").innerText()).trim() !== "Hanna ruft an") throw new Error("incoming title after push");
+      let st = await rx.evaluate(() => window.__hannafonTest.incomingState());
+      if (!st.hasOffer || st.pendingFrom !== 10) throw new Error("replayed offer missing " + JSON.stringify(st));
+      const ring = await rx.evaluate(() => window.__hannafonTest.audioDebug());
+      if (!ring.ringing) throw new Error("ringtone should start on the replayed incoming screen");
+      await rx.locator("#btn-accept").click();
+      await waitVideo(hanna);
+      await waitVideo(rx);
+      await hannaHangsUp();
+      await rx.locator("#screen-standby").waitFor({ state: "visible", timeout: 10000 });
+      results.push("push cold start: replayed offer, Annehmen, video connected (ICE " + st.pendingIce + ")");
+
+      // b) App in memory, socket killed by iOS; notification tap -> SW message.
+      await rx.waitForTimeout(800);
+      await rx.evaluate(() => window.__hannafonTest.dropSocket());
+      await hannaCallsDaniel();
+      await rx.evaluate(() => { window.__hannafonTest.restoreSocket(); });
+      await rx.evaluate(() => window.__hannafonTest.expectIncoming(10));
+      await rx.locator("#screen-incoming").waitFor({ state: "visible", timeout: 12000 });
+      await rx.locator("#btn-accept").click();
+      await waitVideo(hanna);
+      await waitVideo(rx);
+      await hannaHangsUp();
+      await rx.locator("#screen-standby").waitFor({ state: "visible", timeout: 10000 });
+      results.push("push warm start: socket revived, Annehmen, connected");
+
+      // c) Offer never reached the page and Daniel taps "Hanna anrufen":
+      //    no reverse call to Hanna; Daniel gets her ringing offer instead.
+      await rx.waitForTimeout(800);
+      await rx.evaluate(() => window.__hannafonTest.muteCalls(true));
+      await hannaCallsDaniel();
+      await rx.evaluate(() => window.__hannafonTest.muteCalls(false));
+      await rx.locator("#btn-call-host").click();
+      await rx.locator("#screen-incoming").waitFor({ state: "visible", timeout: 10000 });
+      const hs = await hanna.evaluate(() => window.__hannafonTest.incomingState());
+      if (hs.screen !== "call" || !hs.outgoing || hs.pendingFrom) {
+        throw new Error("Hanna must keep calling, no reverse incoming " + JSON.stringify(hs));
+      }
+      if (await hanna.locator("#screen-incoming").isVisible()) throw new Error("Hanna got a reverse call");
+      // And with the offer showing, Anrufen-path answers (startCall -> accept).
+      await rx.locator("#btn-accept").click();
+      await waitVideo(hanna);
+      await waitVideo(rx);
+      await hannaHangsUp();
+      await rx.locator("#screen-standby").waitFor({ state: "visible", timeout: 10000 });
+      results.push("callback while Hanna rings: no reverse call, answered instead");
+
+      // d) Hanna already hung up: opening from the old notification shows no stale call.
+      await rx.waitForTimeout(800);
+      await rx.evaluate(() => window.__hannafonTest.dropSocket());
+      await hannaCallsDaniel();
+      await hannaHangsUp();
+      await rx.goto(APP + "?incoming=10", { waitUntil: "load" });
+      await rx.locator("#screen-standby").waitFor({ state: "visible", timeout: 12000 });
+      await rx.waitForTimeout(2500);
+      await assertHidden(rx, "#screen-incoming", "stale offer after hangup");
+      await rx.waitForFunction(() => !document.getElementById("app").classList.contains("is-expecting-call"), null, { timeout: 12000 });
+      await assertHidden(rx, "#screen-incoming", "stale offer after timeout");
+      results.push("expired call: no stale incoming screen");
+
+      await openDisconnectDialog(rx);
+      await confirmDisconnect(rx);
+      await rx.close();
+      await rxCtx.close();
+    }
 
     // V1.05 landscape full-bleed: iPad 10 and iPad mini, with and without the
     // iOS standalone "one status bar short" bug, all heads hittable at default fit.
@@ -921,8 +1242,8 @@ async function run() {
 
     // Structural push endpoint (no delivery assertion locally)
     const health = await fetch(HEALTH).then((r) => r.json());
-    if (!health.ok || health.version !== "V1.05") throw new Error("health/version");
-    results.push("worker health V1.05");
+    if (!health.ok || health.version !== "V1.06") throw new Error("health/version");
+    results.push("worker health V1.06");
 
     console.log("E2E OK:", results.join(", "));
     console.log("screenshots:", fs.readdirSync(shots).join(", "));

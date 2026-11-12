@@ -40,6 +40,9 @@ import {
   isAudioUnlocked,
   audioContextState,
   bindAudioUnlock,
+  setCallActive,
+  isRingAudible,
+  audioDebug,
 } from "./audio.js";
 
 const $ = (id) => document.getElementById(id);
@@ -142,6 +145,8 @@ function showScreen(name) {
   const app = document.getElementById("app");
   app.classList.toggle("is-photo", showPhoto);
   app.classList.toggle("is-in-call", name === "call");
+  // V1.06: pause the audio keep-alive while WebRTC owns the audio session.
+  setCallActive(name === "call");
   if (!showPhoto) app.classList.remove("is-zoomed");
   if (name !== "photo") closeAddressbook();
   updateCornerButtons();
@@ -149,8 +154,9 @@ function showScreen(name) {
   requestEdgeColors();
 }
 
-// Bottom-left corner: "Adressbuch" on the host overview, "Zurück zum
-// Familienfoto" while zoomed on a person. Never both, never on incoming/call.
+// Bottom-right corner (V1.06): "Adressbuch" on the host overview, "Zum Foto"
+// while zoomed on a person (same spot as "Zum Foto" in the list). Never both,
+// never on incoming/call.
 function updateCornerButtons() {
   const onPhoto = !ui.photo.hidden && ui.incoming.hidden && ui.call.hidden;
   const bookOpen = !ui.addressbook.hidden;
@@ -281,6 +287,18 @@ function origToPhoto(p, photo) {
   return { x: p.cx * sx, y: p.cy * sy, r: p.r * sx };
 }
 
+// V1.06: pinch/pan of the family photo only on phones in portrait (receivers,
+// contain layout, so every head can be reached). iPad and iPad mini (any
+// orientation, host Hanna) get no pinch: the photo always shows as laid out;
+// tapping a face still zooms to that person.
+function pinchAllowed() {
+  const layout = state.layout;
+  if (!layout?.contain) return false;
+  const w = ui.stage.clientWidth || window.innerWidth;
+  const h = ui.stage.clientHeight || window.innerHeight;
+  return Math.min(w, h) < 600;
+}
+
 function applyStageLayout() {
   const cfg = state.config;
   if (!cfg?.photo) return;
@@ -291,8 +309,9 @@ function applyStageLayout() {
   ui.stack.style.height = `${layout.dh}px`;
   ui.stack.style.left = `${layout.ox}px`;
   ui.stack.style.top = `${layout.oy}px`;
-  ui.stage.classList.toggle("is-pannable", !!layout.contain && !state.zoomed);
-  if (!layout.contain) {
+  const canPinch = pinchAllowed();
+  ui.stage.classList.toggle("is-pannable", canPinch && !state.zoomed);
+  if (!canPinch) {
     state.nav = { s: 1, x: 0, y: 0 };
     state.navUser = false;
   } else if (!state.navUser) {
@@ -532,6 +551,32 @@ function clearMask() {
   ui.sharp.classList.remove("is-masked");
 }
 
+// V1.06: eight mirrored copies of the blurred photo around the stack. Mirroring
+// makes every seam continuous, so a zoomed edge face can sit in the centre and
+// the photo simply seems to go on (blurred) beyond its real edge.
+const EXTEND_TILES = [
+  [-1, -1], [0, -1], [1, -1],
+  [-1, 0], [1, 0],
+  [-1, 1], [0, 1], [1, 1],
+];
+function paintPhotoExtend(src) {
+  const box = document.getElementById("photo-extend");
+  if (!box || !src) return;
+  if (!box.childElementCount) {
+    for (const [cx, cy] of EXTEND_TILES) {
+      const img = document.createElement("img");
+      img.alt = "";
+      img.draggable = false;
+      // 1px overlap towards the photo hides any hairline seam.
+      img.style.left = `calc(${cx * 100}% - ${cx}px)`;
+      img.style.top = `calc(${cy * 100}% - ${cy}px)`;
+      img.style.transform = `scale(${cx ? -1 : 1}, ${cy ? -1 : 1})`;
+      box.appendChild(img);
+    }
+  }
+  for (const img of box.children) img.src = src;
+}
+
 async function applyZoom(person, animate = true) {
   const layout = state.layout;
   const photo = state.config.photo;
@@ -552,22 +597,19 @@ async function applyZoom(person, animate = true) {
   const targetH = viewH * 0.62;
   const targetW = viewW * 0.88;
   const zFit = Math.min(targetW / bw, targetH / bh) * 0.92;
-  // Always fill the viewport: never zoom out so far that edges show,
-  // and clamp the pan at the photo bounds (no black bars).
+  // Never zoom out below "photo covers the viewport". One mirrored tile on
+  // each side is then always enough to centre any face (see paintPhotoExtend).
   const zMin = Math.max(viewW / layout.dw, viewH / layout.dh) * 1.002;
   const z = Math.max(zFit, zMin);
   const lx = faceX;
   const ly = faceY;
+  // V1.06: the chosen face always lands at the horizontal centre (and the
+  // usual height above name + Anrufen), no clamping at the photo bounds:
+  // beyond the real edge the mirrored blurred extension shows.
   const destX = viewW / 2;
   const destY = viewH * 0.28;
-  let tx = destX - layout.ox - lx * z;
-  let ty = destY - layout.oy - ly * z;
-  const txMin = viewW - layout.ox - layout.dw * z;
-  const txMax = -layout.ox;
-  const tyMin = viewH - layout.oy - layout.dh * z;
-  const tyMax = -layout.oy;
-  tx = Math.min(txMax, Math.max(txMin, tx));
-  ty = Math.min(tyMax, Math.max(tyMin, ty));
+  const tx = destX - layout.ox - lx * z;
+  const ty = destY - layout.oy - ly * z;
   ui.stack.style.transition = animate ? "" : "none";
   state.view = { tx, ty, s: z };
   ui.stack.style.transform = `translate(${tx}px, ${ty}px) scale(${z})`;
@@ -588,7 +630,7 @@ function unzoom() {
   setZoomedClass(false);
   ui.stack.style.transition = "";
   applyNavTransform();
-  ui.stage.classList.toggle("is-pannable", !!state.layout?.contain);
+  ui.stage.classList.toggle("is-pannable", pinchAllowed());
   ui.greeting.classList.remove("is-hidden");
   ui.setupTitle.classList.remove("is-hidden");
   clearMask();
@@ -755,6 +797,7 @@ async function loadMedia() {
   ui.sharp.src = sharpUrl;
   ui.blur.src = blurUrl;
   if (ui.blurFill) ui.blurFill.src = blurUrl;
+  paintPhotoExtend(blurUrl);
   ui.sharp.alt = "Familienfoto";
   await ui.sharp.decode().catch(() => {});
   await ui.blur.decode().catch(() => {});
@@ -799,8 +842,49 @@ async function afterAuth(cfg, code) {
   const incoming = incomingFromUrl();
   goHome();
   if (incoming && state.identity) {
-    // Push click opened the app; wait for the live signaling offer if any.
+    // Push click opened the app (cold start). The Worker replays the
+    // still-ringing offer on connect; until then don't let "Anrufen" place a
+    // callback, and if nothing arrives the call is over.
+    expectIncoming(incoming);
   }
+}
+
+// ---------------------------------------------------------------------------
+// V1.06: opened from a call notification
+const EXPECT_INCOMING_MS = 8000;
+function expectIncoming(fromNr) {
+  const nr = Number(fromNr) || 0;
+  if (!nr || !state.identity) return;
+  if (state.pendingFrom && Number(state.pendingFrom.nr) === nr) return; // already showing
+  if (state.inCallWith && !state.outgoing) return;
+  state.expectIncoming = { from: nr, until: Date.now() + EXPECT_INCOMING_MS };
+  document.getElementById("app").classList.add("is-expecting-call");
+  // Fresh socket: replay arrives on "hello". (Also covers a dead iOS socket.)
+  state.signaling.reconnect();
+  clearTimeout(state.expectTimer);
+  state.expectTimer = setTimeout(() => {
+    if (!state.expectIncoming) return;
+    endExpectIncoming();
+    if (!state.pendingFrom && !state.inCallWith) {
+      ui.takenToast.textContent = "Anruf vorbei";
+      show(ui.takenToast, true);
+      setTimeout(() => {
+        show(ui.takenToast, false);
+        ui.takenToast.textContent = "Anderswo angenommen";
+      }, 2600);
+    }
+  }, EXPECT_INCOMING_MS);
+}
+
+function endExpectIncoming() {
+  state.expectIncoming = null;
+  clearTimeout(state.expectTimer);
+  document.getElementById("app").classList.remove("is-expecting-call");
+}
+
+function expectingFrom(nr) {
+  const e = state.expectIncoming;
+  return !!(e && Date.now() < e.until && Number(e.from) === Number(nr));
 }
 
 async function tryStoredCode() {
@@ -979,15 +1063,15 @@ document.addEventListener("visibilitychange", () => {
 window.visualViewport?.addEventListener("resize", onViewportChange);
 
 // ---------------------------------------------------------------------------
-// Status bar + page edge colours (V1.05)
+// Status bar + page edge colours (V1.05, V1.06)
 //
-// The app now uses the opaque status bar ("default"): on iOS 26 a translucent
-// status bar gets the system's Liquid Glass blur over whatever we draw under
-// it, which smeared the top of the family photo. With an opaque bar, iOS tints
-// it with theme-color, so we keep theme-color equal to the colour of the photo
-// row that touches the top edge (cream on cream screens, dark in a call). The
-// html background follows the photo's bottom edge, so any area iOS paints
-// outside the page blends into the photo instead of showing cream/white.
+// V1.06: the status bar is always solid black ("black" status-bar style,
+// theme-color #000000). It is no longer tinted from the photo or cream.
+// The opaque style keeps iOS 26's Liquid Glass blur off the photo (the
+// translucent style put the photo under the bar). We still sample the photo's
+// bottom edge for the html/page background, so any area iOS paints outside
+// the page blends into the photo instead of showing cream/white.
+const STATUS_BAR = "#000000";
 const CREAM = "#F6EFE3";
 const CALL_BG = "#111111";
 const edgeSamplers = { sharp: null, blur: null };
@@ -1050,11 +1134,17 @@ function visibleEdgeColors() {
   const H = ui.stage.clientHeight;
   const toFx = (cx) => (cx - layout.ox - v.tx) / v.s / layout.dw;
   const toFy = (cy) => (cy - layout.oy - v.ty) / v.s / layout.dh;
-  const fx0 = Math.max(0, toFx(0));
-  const fx1 = Math.min(1, toFx(W));
+  let fx0 = Math.max(0, toFx(0));
+  let fx1 = Math.min(1, toFx(W));
+  if (fx1 - fx0 < 0.02) { fx0 = Math.max(0, Math.min(fx0, 0.98)); fx1 = Math.min(1, fx0 + 0.02); }
   const band = 0.025;
-  const fyTop = toFy(0);
-  const fyBot = toFy(H);
+  let fyTop = toFy(0);
+  let fyBot = toFy(H);
+  if (state.zoomed) {
+    // Zoomed views may extend past the photo (mirrored): use the nearest real row.
+    fyTop = Math.min(1 - band, Math.max(0, fyTop));
+    fyBot = Math.min(1, Math.max(band, fyBot));
+  }
   const top = fyTop < -0.002 ? null : sampleBand(sampler, fx0, fx1, fyTop, fyTop + band);
   const bottom = fyBot > 1.002 ? null : sampleBand(sampler, fx0, fx1, fyBot - band, fyBot);
   return { top, bottom };
@@ -1062,7 +1152,7 @@ function visibleEdgeColors() {
 
 function setEdgeColors(top, bottom) {
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta && meta.getAttribute("content") !== top) meta.setAttribute("content", top);
+  if (meta && meta.getAttribute("content") !== STATUS_BAR) meta.setAttribute("content", STATUS_BAR);
   const root = document.documentElement;
   root.style.setProperty("--edge-top", top);
   root.style.setProperty("--edge-bottom", bottom);
@@ -1197,6 +1287,17 @@ async function startCall(person) {
   } else if (!isHostPerson(person, state.config)) {
     return; // receivers only call the host
   }
+  // V1.06: that person is calling us right now: answer instead of calling back.
+  if (state.pendingFrom && Number(state.pendingFrom.nr) === Number(person.nr) && state.pendingOffer) {
+    acceptIncoming();
+    return;
+  }
+  // Opened from their call notification and the offer is still on its way:
+  // fetch it again instead of ringing them back.
+  if (expectingFrom(person.nr)) {
+    state.signaling.reconnect();
+    return;
+  }
   hangup(false);
   state.inCallWith = person;
   state.outgoing = true;
@@ -1225,10 +1326,27 @@ async function startCall(person) {
 
 function onRemoteCall(data) {
   if (state.inCallWith && !state.outgoing) return;
+  if (!data?.sdp) return;
   const from = personByNr(data.from);
+  // Same offer again (replay after reconnect): keep the screen, add any ICE.
+  if (state.pendingFrom && from && Number(state.pendingFrom.nr) === Number(from.nr) &&
+      data.callId && data.callId === state.pendingCallId && !ui.incoming.hidden) {
+    for (const c of data.ice || []) queuePendingIce(c);
+    endExpectIncoming();
+    return;
+  }
+  // We were calling them ourselves (glare / callback): drop our own outgoing
+  // attempt silently (no hangup to them) and take their call instead.
+  if (state.outgoing && state.inCallWith && from && Number(state.inCallWith.nr) === Number(from.nr)) {
+    dropLocalCall();
+  }
+  endExpectIncoming();
   state.pendingOffer = data.sdp;
   state.pendingFrom = from;
   state.pendingFromDevice = data.fromDevice || null;
+  state.pendingCallId = data.callId || null;
+  state.pendingIce = [];
+  for (const c of data.ice || []) queuePendingIce(c);
   ui.incomingTitle.textContent = `${from?.name || "Jemand"} ruft an`;
   show(ui.zoomCard, false);
   showScreen("incoming");
@@ -1241,7 +1359,9 @@ function onRemoteCall(data) {
 }
 
 function updateRingHint() {
-  const locked = !isAudioUnlocked();
+  // Hint only when nothing is audible (iOS refused both the ringtone file and
+  // the Web Audio fallback, e.g. no tap since launch).
+  const locked = !isRingAudible();
   ui.incoming?.classList.toggle("is-waiting-audio", locked && !ui.incoming.hidden);
   show(ui.ringHint, locked && !ui.incoming.hidden);
 }
@@ -1257,11 +1377,38 @@ async function onRemoteAnswer(data) {
   await flushIce(state.pc);
 }
 
+function queuePendingIce(c) {
+  if (!c) return;
+  state.pendingIce = state.pendingIce || [];
+  if (state.pendingIce.length < 60) state.pendingIce.push(c);
+}
+
+// Tear down our own outgoing attempt without telling the other side.
+function dropLocalCall() {
+  stopRingtone();
+  closePeer(state.pc);
+  state.pc = null;
+  stopStream(state.localStream);
+  state.localStream = null;
+  ui.localVideo.srcObject = null;
+  state.inCallWith = null;
+  state.outgoing = false;
+  state.callId = null;
+  state.peerDevice = null;
+}
+
 async function onRemoteIce(data) {
+  // V1.06: before Annehmen there is no peer yet; keep the caller's candidates.
+  if (!state.pc && data.candidate && state.pendingFrom && Number(data.from) === Number(state.pendingFrom.nr)) {
+    queuePendingIce(data.candidate);
+    return;
+  }
   if (state.pc && data.candidate) await addIce(state.pc, data.candidate);
 }
 
-ui.btnAccept.addEventListener("click", async () => {
+ui.btnAccept.addEventListener("click", () => acceptIncoming());
+
+async function acceptIncoming() {
   stopRingtone();
   show(ui.ringHint, false);
   ui.incoming?.classList.remove("is-waiting-audio");
@@ -1277,6 +1424,8 @@ ui.btnAccept.addEventListener("click", async () => {
     ui.localVideo.srcObject = state.localStream;
     state.pc = createPeer(state.config.iceServers, state.localStream, peerHandlers(from.nr));
     await state.pc.setRemoteDescription(offer);
+    for (const c of state.pendingIce || []) await addIce(state.pc, c);
+    state.pendingIce = [];
     await flushIce(state.pc);
     const answer = await state.pc.createAnswer();
     await state.pc.setLocalDescription(answer);
@@ -1291,7 +1440,7 @@ ui.btnAccept.addEventListener("click", async () => {
   } catch {
     ui.callStatus.textContent = "Kamera oder Mikrofon nicht verfügbar";
   }
-});
+}
 
 ui.btnDecline.addEventListener("click", () => {
   stopRingtone();
@@ -1302,6 +1451,8 @@ ui.btnDecline.addEventListener("click", () => {
   }
   state.pendingFrom = null;
   state.pendingOffer = null;
+  state.pendingCallId = null;
+  state.pendingIce = [];
   goHome();
 });
 
@@ -1324,6 +1475,8 @@ function hangup(remote) {
   state.pendingFrom = null;
   state.pendingFromDevice = null;
   state.pendingOffer = null;
+  state.pendingCallId = null;
+  state.pendingIce = [];
   state.peerDevice = null;
   state.callId = null;
   if (state.identity && state.config) goHome();
@@ -1362,18 +1515,19 @@ ui.btnPushTest?.addEventListener("click", async () => {
 
 ui.incoming?.addEventListener("pointerdown", async (ev) => {
   if (ev.target.closest("#btn-accept, #btn-decline")) return;
-  await unlockAudio();
-  if (state.pendingFrom) await startRingtone();
+  await unlockAudio(true);
+  if (state.pendingFrom && !isRingAudible()) await startRingtone();
   updateRingHint();
 });
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {});
   navigator.serviceWorker.addEventListener("message", (ev) => {
-    if (ev.data?.type === "incoming" && ev.data.data?.from) {
-      // If we already have a live call offer, the UI is showing; otherwise just hint.
-    }
+    // V1.06: notification tapped while the app was in memory: reconnect so the
+    // Worker replays the ringing offer and Annehmen appears.
+    if (ev.data?.type === "incoming" && ev.data.data?.from) expectIncoming(ev.data.data.from);
   });
+  navigator.serviceWorker.startMessages?.();
 }
 
 if (ui.btnDisconnect) {
@@ -1413,7 +1567,7 @@ async function disconnectThisDevice() {
   let lastDist = 0;
 
   function active() {
-    return !state.zoomed && !!state.layout?.contain;
+    return !state.zoomed && pinchAllowed();
   }
 
   ui.stage.addEventListener("pointerdown", (ev) => {
@@ -1475,6 +1629,44 @@ async function disconnectThisDevice() {
     { passive: false }
   );
 })();
+
+// V1.06: no page zoom (Safari pinch, double-tap, trackpad ctrl+wheel). The
+// viewport meta and touch-action already ask for this; iOS honours these
+// events more reliably in Home Screen apps. Two-finger moves on the photo stay
+// allowed only where the app's own phone pinch is active.
+(function blockPageZoom() {
+  const block = (ev) => ev.preventDefault();
+  for (const ev of ["gesturestart", "gesturechange", "gestureend"]) {
+    document.addEventListener(ev, block, { passive: false });
+  }
+  document.addEventListener(
+    "touchmove",
+    (ev) => {
+      if (ev.touches && ev.touches.length > 1) {
+        if (pinchAllowed() && !state.zoomed && ui.stage.contains(ev.target)) return;
+        ev.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+  document.addEventListener(
+    "wheel",
+    (ev) => {
+      if (ev.ctrlKey && !(pinchAllowed() && ui.stage.contains(ev.target))) ev.preventDefault();
+    },
+    { passive: false }
+  );
+})();
+
+// V1.06: back from background (iOS suspends sockets): reconnect when idle so a
+// call that started meanwhile is replayed by the Worker.
+function reviveSignaling() {
+  if (document.visibilityState !== "visible") return;
+  if (!state.identity || !state.config || state.inCallWith) return;
+  state.signaling.reconnect();
+}
+document.addEventListener("visibilitychange", reviveSignaling);
+window.addEventListener("pageshow", (ev) => { if (ev.persisted) reviveSignaling(); });
 
 bindAudioUnlock();
 tryStoredCode();
@@ -1561,4 +1753,33 @@ window.__hannafonTest = {
   unlockAudio,
   startRingtone,
   stopRingtone,
+  audioDebug,
+  isRingAudible,
+  pinchAllowed: () => pinchAllowed(),
+  incomingState: () => ({
+    screen: state.screen,
+    pendingFrom: state.pendingFrom?.nr || null,
+    hasOffer: !!state.pendingOffer,
+    pendingIce: (state.pendingIce || []).length,
+    expecting: state.expectIncoming ? state.expectIncoming.from : null,
+    inCallWith: state.inCallWith?.nr || null,
+    outgoing: !!state.outgoing,
+  }),
+  expectIncoming: (nr) => expectIncoming(nr),
+  dropSocket: () => {
+    // Simulate iOS killing the socket while backgrounded (no reconnect).
+    state.signaling.wanted = false;
+    try { state.signaling.ws?.close(); } catch { /* ignore */ }
+    state.signaling.ws = null;
+  },
+  muteCalls: (on) => {
+    // Simulate "offer never reached this page" while the socket stays up.
+    if (on) state.signaling.handlers.delete("call");
+    else state.signaling.on("call", onRemoteCall);
+  },
+  restoreSocket: () => {
+    state.signaling.wanted = true;
+    state.signaling.reconnect();
+  },
+  photoScale: () => ({ ...currentView(), navUser: !!state.navUser }),
 };
