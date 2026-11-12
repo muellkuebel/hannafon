@@ -56,9 +56,10 @@ html, body {
      dvh, not lvh: in a Safari tab the bottom pills must stay above the toolbar. */
   height: calc(100% + var(--ios-gap));
   height: calc(100dvh + var(--ios-gap));
-  /* Whatever iOS paints outside the page (under-page area, launch, rotation)
-     takes the colour of the photo's bottom edge instead of cream/white. */
-  background: var(--edge-bottom);
+  /* V1.07: black. iOS 26+ takes the Home Screen status bar colour from the
+     page (html/body, fixed elements at the top), so cream here showed up as a
+     cream status bar. Black also fills the simulated iPad display corners. */
+  background: #000;
   color: var(--ink);
   font-family: "Nunito", ui-rounded, system-ui, sans-serif;
   -webkit-user-select: none;
@@ -83,10 +84,46 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   height: calc(100vh + var(--ios-gap));
   height: calc(100dvh + var(--ios-gap));
   overflow: hidden;
-  background: var(--cream);
+  /* V1.07: black (fixed at the top, so iOS 26+ may colour the status bar from
+     it). The cream lives on the screens inside. */
+  background: #000;
 }
-#app.is-photo {
-  background: var(--cream);
+.screen { background: var(--cream); }
+
+/* V1.07: solid black strip at the very top of the installed app. iOS 26+
+   colours the status bar from a fixed element >= 6px high, >= 80% wide,
+   within 4px of the top. Only in the Home Screen app (html.is-standalone). */
+.statusbar-fill {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: max(6px, var(--safe-t));
+  background: #000;
+  z-index: 2147483000;
+  pointer-events: none;
+}
+html.is-standalone .statusbar-fill { display: block; }
+
+/* V1.07: iPad display rounding, TOP corners only. The physical iPad screen is
+   rounded; at the bottom the hardware curve already does the job, so the
+   bottom stays square in software. At the top the black status bar met the
+   photo with a hard, square edge: the top-left and top-right corners now
+   follow the display curve and the black shows outside it, like the bezel.
+   ~18pt (iPad 10/Air/Pro) to ~21.5pt (mini) on real devices: about 20px on
+   iPad mini, 22px on iPad 10, max 26px. The clip sits on <body> (covers both
+   #app and the full-width black #statusbar-fill, so the strip cannot square
+   off the corners) and on #app (border-radius + clip-path also clips zoomed
+   layers in WebKit). */
+html.is-tablet {
+  --display-r: clamp(18px, 2.7vmin, 26px);
+}
+html.is-tablet body,
+html.is-tablet #app {
+  border-radius: var(--display-r) var(--display-r) 0 0;
+  clip-path: inset(0 round var(--display-r) var(--display-r) 0 0);
 }
 
 .hidden, [hidden] { display: none !important; }

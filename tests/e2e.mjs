@@ -276,9 +276,141 @@ async function assertTopClean(page, label) {
   if (String(info.meta).toLowerCase() !== "#000000") {
     throw new Error(label + ": theme-color must stay black " + JSON.stringify(info));
   }
-  if (info.htmlBg !== hexToRgb(info.edge.bottom) || info.htmlBg === CREAM_RGB) {
-    throw new Error(label + ": html background should be the photo bottom edge colour " + JSON.stringify(info));
+  // V1.07: iOS 26+ colours the Home Screen status bar from the page: html/body
+  // and the fixed #app must be black, never cream; every theme-color meta black.
+  const v107 = await page.evaluate(() => ({
+    metas: [...document.querySelectorAll('meta[name="theme-color"]')].map((m) => [m.getAttribute("media") || "", m.getAttribute("content")]),
+    bodyBg: getComputedStyle(document.body).backgroundColor,
+    appBg: getComputedStyle(document.getElementById("app")).backgroundColor,
+  }));
+  if (info.htmlBg !== "rgb(0, 0, 0)" || v107.bodyBg !== "rgb(0, 0, 0)" || v107.appBg !== "rgb(0, 0, 0)") {
+    throw new Error(label + ": html/body/#app background must be black " + JSON.stringify({ ...info, ...v107 }));
   }
+  const medias = v107.metas.map((m) => m[0]);
+  if (v107.metas.length < 3 || v107.metas.some((m) => String(m[1]).toLowerCase() !== "#000000") ||
+      !medias.includes("(prefers-color-scheme: light)") || !medias.includes("(prefers-color-scheme: dark)")) {
+    throw new Error(label + ": theme-color metas (plain/light/dark) must all be #000000 " + JSON.stringify(v107.metas));
+  }
+}
+
+// V1.07: manifest chrome colours black (iOS uses background_color around the webview / launch).
+async function assertManifestBlack(page) {
+  const m = await page.evaluate(async () => (await fetch("./manifest.webmanifest", { cache: "no-store" })).json());
+  if (String(m.background_color).toLowerCase() !== "#000000" || String(m.theme_color).toLowerCase() !== "#000000") {
+    throw new Error("manifest background_color/theme_color must be #000000: " + JSON.stringify([m.background_color, m.theme_color]));
+  }
+}
+
+// V1.07: black fixed strip at the very top, only in the Home Screen app (iOS 26+ rule:
+// >= 6px high, >= 80% wide, within 4px of the top).
+async function assertStatusStrip(page, label) {
+  const read = () => page.evaluate(() => {
+    const el = document.getElementById("statusbar-fill");
+    const cs = el && getComputedStyle(el);
+    const r = el?.getBoundingClientRect();
+    return el ? { display: cs.display, position: cs.position, bg: cs.backgroundColor, top: r.top, h: r.height, w: r.width, innerW: innerWidth, pe: cs.pointerEvents } : null;
+  });
+  await page.evaluate(() => { delete window.__HANNAFON_VIEWPORT_TEST__; window.__hannafonTest.updateViewportFix(); });
+  const off = await read();
+  if (!off || off.display !== "none") throw new Error(label + ": status strip must be hidden in a browser tab " + JSON.stringify(off));
+  await page.evaluate(() => { window.__HANNAFON_VIEWPORT_TEST__ = { standalone: true }; window.__hannafonTest.updateViewportFix(); });
+  const on = await read();
+  await page.evaluate(() => { delete window.__HANNAFON_VIEWPORT_TEST__; window.__hannafonTest.updateViewportFix(); });
+  if (on.display === "none" || on.position !== "fixed" || on.bg !== "rgb(0, 0, 0)" || on.top > 4 || on.h < 6 ||
+      on.w < on.innerW * 0.8 || on.pe !== "none") {
+    throw new Error(label + ": standalone status strip wrong " + JSON.stringify(on));
+  }
+}
+
+// V1.07: iPad display rounding, TOP corners only (the hardware already rounds the
+// bottom): body and #app top radii ~18-26px, bottom square in CSS; outside the top
+// curve is black (not cream), also with the standalone black strip shown; hit-testing
+// there misses the app; the greeting stays clear of the curve. iPhone: no rounding.
+async function assertDisplayRounding(page, label, expectTablet) {
+  const read = () => page.evaluate(() => {
+    const app = document.getElementById("app");
+    const cs = getComputedStyle(app);
+    const bs = getComputedStyle(document.body);
+    const r = app.getBoundingClientRect();
+    const id = (el) => (el ? el.id || el.tagName : null);
+    const g = document.getElementById("greeting");
+    const gVisible = g && getComputedStyle(g).display !== "none" && !g.hidden;
+    const gr = gVisible ? [...g.querySelectorAll("p")].map((p) => p.getBoundingClientRect()).filter((b) => b.width > 0) : [];
+    return {
+      tablet: document.documentElement.classList.contains("is-tablet"),
+      tl: parseFloat(cs.borderTopLeftRadius) || 0,
+      tr: parseFloat(cs.borderTopRightRadius) || 0,
+      bl: parseFloat(cs.borderBottomLeftRadius) || 0,
+      br: parseFloat(cs.borderBottomRightRadius) || 0,
+      bodyTl: parseFloat(bs.borderTopLeftRadius) || 0,
+      bodyBl: parseFloat(bs.borderBottomLeftRadius) || 0,
+      clip: cs.clipPath,
+      bodyClip: bs.clipPath,
+      W: innerWidth,
+      H: Math.min(innerHeight, r.bottom),
+      hitTL: id(document.elementFromPoint(1, 1)),
+      hitTR: id(document.elementFromPoint(innerWidth - 1, 1)),
+      hitBL: id(document.elementFromPoint(1, Math.min(innerHeight, r.bottom) - 1)),
+      hitBR: id(document.elementFromPoint(innerWidth - 1, Math.min(innerHeight, r.bottom) - 1)),
+      greeting: gr.map((b) => ({ top: b.top, right: b.right, left: b.left, bottom: b.bottom })),
+    };
+  });
+  const info = await read();
+  if (!expectTablet) {
+    if (info.tablet || info.tl || info.tr || info.bl || info.br || info.bodyTl) {
+      throw new Error(label + ": no simulated rounding expected " + JSON.stringify(info));
+    }
+    return info;
+  }
+  const R = info.tl;
+  if (!info.tablet || R < 18 || R > 26 || info.tr !== R || info.bodyTl !== R || info.bl || info.br || info.bodyBl ||
+      !/round/.test(info.clip) || !/round/.test(info.bodyClip)) {
+    throw new Error(label + ": iPad top-only rounding wrong " + JSON.stringify(info));
+  }
+  if (!["HTML", "BODY"].includes(info.hitTL) || !["HTML", "BODY"].includes(info.hitTR)) {
+    throw new Error(label + ": top corners outside the curve must not hit the app " + JSON.stringify(info));
+  }
+  if (["HTML", "BODY"].includes(info.hitBL) || ["HTML", "BODY"].includes(info.hitBR)) {
+    throw new Error(label + ": bottom corners must stay square (no software cut-out) " + JSON.stringify(info));
+  }
+  // Greeting text clear of the top-right curve (with a few px to spare).
+  for (const b of info.greeting) {
+    const cx = info.W - R, cy = R;
+    if (b.right > cx && b.top < cy && Math.hypot(b.right - cx, b.top - cy) > R - 4) {
+      throw new Error(label + ": greeting touches the rounded corner " + JSON.stringify(b));
+    }
+  }
+  // Pixels: top corners black (bezel), never cream; in a tab and with the
+  // standalone black strip (which must not square the corners off into cream).
+  const { default: sharp } = await import("sharp");
+  const pixels = async (tag) => {
+    const buf = await page.screenshot({ type: "png" });
+    const img = sharp(buf);
+    const meta = await img.metadata();
+    const { data, info: ri } = await img.raw().toBuffer({ resolveWithObject: true });
+    const scale = meta.width / page.viewportSize().width;
+    const px = (x, y) => {
+      const i = (Math.round(y * scale) * ri.width + Math.round(x * scale)) * ri.channels;
+      return [data[i], data[i + 1], data[i + 2]];
+    };
+    const W = page.viewportSize().width;
+    // Diagonal points just outside the arc (corner distance > R).
+    const d = Math.max(1, Math.floor(R * (1 - Math.SQRT1_2)) - 2);
+    for (const [x, y] of [[0.5, 0.5], [d, d], [1, 8], [W - 1, 0.5], [W - 1 - d, d], [W - 2, 8]]) {
+      const [r, g, b] = px(x, y);
+      if (r > 40 || g > 40 || b > 40) throw new Error(`${label} ${tag}: top corner pixel (${x},${y}) not black: ${[r, g, b]}`);
+    }
+  };
+  await pixels("tab");
+  await page.evaluate(() => { window.__HANNAFON_VIEWPORT_TEST__ = { standalone: true }; window.__hannafonTest.updateViewportFix(); });
+  try {
+    const sa = await read();
+    if (!sa.tablet || sa.bodyTl !== R) throw new Error(label + ": standalone lost the rounding " + JSON.stringify(sa));
+    await pixels("standalone");
+  } finally {
+    await page.evaluate(() => { delete window.__HANNAFON_VIEWPORT_TEST__; window.__hannafonTest.updateViewportFix(); });
+  }
+  return info;
 }
 
 // Landscape iPad: photo covers the whole (possibly iOS-gap-extended) app, and every
@@ -326,6 +458,14 @@ async function assertLandscapeFullBleed(page, viewport, tag, sim) {
     for (const b of chrome) {
       if (b && pt.x > b.x - 4 && pt.x < b.x + b.width + 4 && pt.y > b.y - 4 && pt.y < b.y + b.height + 4) {
         throw new Error(`${tag}: head #${p.nr} sits under a button`);
+      }
+    }
+    // V1.07: not inside the simulated rounded top display corners.
+    const R = await page.evaluate(() => parseFloat(getComputedStyle(document.getElementById("app")).borderTopLeftRadius) || 0);
+    for (const cx of [R, geo.innerW - R]) {
+      const cy = R;
+      if (R && (pt.x < R || pt.x > geo.innerW - R) && pt.y < cy && Math.hypot(pt.x - cx, pt.y - cy) > R - 4) {
+        throw new Error(`${tag}: head #${p.nr} sits in a rounded corner`);
       }
     }
     await page.mouse.click(pt.x, pt.y);
@@ -609,6 +749,14 @@ async function run() {
     await assertCornerRight(hanna, "#btn-addressbook", "hanna home 1180x820");
     await assertNoPinch(hanna, "ipad-10 landscape");
     results.push("no topfade, black status bar, greeting right, Adressbuch bottom-right, no pinch");
+    await assertManifestBlack(hanna);
+    await assertStatusStrip(hanna, "ipad-10");
+    await assertDisplayRounding(hanna, "ipad-10 1180x820", true);
+    await assertCornerRight(hanna, "#btn-addressbook", "ipad-10 rounded");
+    await shot(hanna, "v107-ipad10-home.jpg");
+    await assertDisplayRounding(daniel, "iphone14 393x852", false);
+    await assertStatusStrip(daniel, "iphone14");
+    results.push("V1.07 black page/app/theme-color/manifest, standalone status strip, iPad top-corner rounding only (bottom square, not iPhone)");
 
     if ((await hanna.locator("i.halo").count()) < 20) {
       throw new Error("expected discreet halos on tappable people");
@@ -908,6 +1056,15 @@ async function run() {
     await mini.locator("#setup-title").waitFor({ state: "visible", timeout: 20000 });
     await waitPhotoReady(mini);
     await cyclePad(mini, { width: 1133, height: 744 }, { width: 744, height: 1133 }, "ipad-mini");
+    await mini.setViewportSize({ width: 1133, height: 744 });
+    await mini.waitForTimeout(300);
+    await assertDisplayRounding(mini, "ipad-mini 1133x744", true);
+    await mini.setViewportSize({ width: 744, height: 1133 });
+    await mini.waitForTimeout(300);
+    await assertDisplayRounding(mini, "ipad-mini portrait 744x1133", true);
+    await mini.setViewportSize({ width: 1133, height: 744 });
+    await mini.waitForTimeout(300);
+    await shot(mini, "v107-ipad-mini-setup.jpg");
     await mini.close();
     await miniCtx.close();
     results.push("ipad mini 1133 orientation");
@@ -1242,8 +1399,8 @@ async function run() {
 
     // Structural push endpoint (no delivery assertion locally)
     const health = await fetch(HEALTH).then((r) => r.json());
-    if (!health.ok || health.version !== "V1.06") throw new Error("health/version");
-    results.push("worker health V1.06");
+    if (!health.ok || health.version !== "V1.07") throw new Error("health/version");
+    results.push("worker health V1.07");
 
     console.log("E2E OK:", results.join(", "));
     console.log("screenshots:", fs.readdirSync(shots).join(", "));

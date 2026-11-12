@@ -1,6 +1,6 @@
 {
   "name": "hannafon",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Hannafon local PWA. Family photo, masks, crops and names are not in this repository.",
   "main": "index.js",
   "directories": {

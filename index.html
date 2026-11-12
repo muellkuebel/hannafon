@@ -12,7 +12,13 @@
        #313800). iOS bakes this in when the icon is added: delete + re-add. -->
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Hannafon">
+  <!-- V1.07: black theme-color for light and dark mode (iOS 15-18 colour the
+       opaque bar from it). iOS 26+ ignores theme-color and the style meta and
+       takes the bar colour from the page: html/body and #app are black and a
+       fixed black strip (#statusbar-fill) sits at the very top in the app. -->
   <meta name="theme-color" content="#000000">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#000000">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
   <title>Hannafon</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
@@ -23,6 +29,9 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <!-- V1.07: iOS 26+ Home Screen apps colour the status bar from a fixed element
+       at the very top (>= 6px high, >= 80% wide, within 4px of the top). -->
+  <div id="statusbar-fill" class="statusbar-fill" aria-hidden="true"></div>
   <audio id="unlock-audio" playsinline webkit-playsinline preload="auto" hidden></audio>
   <!-- V1.06: near-silent loop keeps the iOS audio session alive; real ringtone file. -->
   <audio id="keepalive-audio" src="./sounds/keepalive.m4a" playsinline webkit-playsinline preload="auto" loop hidden></audio>
@@ -168,7 +177,7 @@
     <div id="taken-toast" class="taken-toast hidden" hidden>Anderswo angenommen</div>
 
     <div id="reset-sheet" class="reset-sheet hidden" hidden>
-      <p class="version">Hannafon V1.06</p>
+      <p class="version">Hannafon V1.07</p>
       <button type="button" id="btn-reset" class="pill pill-ink">Alles zurücksetzen</button>
       <button type="button" id="btn-reset-cancel" class="btn-text">Abbrechen</button>
     </div>

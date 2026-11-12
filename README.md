@@ -1,6 +1,6 @@
 # Hannafon
 
-Lokale PWA für Familien-Videoanrufe (V1.06). Vanilla HTML, CSS und JavaScript.
+Lokale PWA für Familien-Videoanrufe (V1.07). Vanilla HTML, CSS und JavaScript.
 
 Live-Test (GitHub Pages + Cloudflare Worker):
 https://muellkuebel.github.io/hannafon/
@@ -26,7 +26,7 @@ npm run test:e2e
 
 ## Hinweise
 
-- Service-Worker-Cache: `hannafon-v1.06`
+- Service-Worker-Cache: `hannafon-v1.07`
 - Verstecktes Zurücksetzen: die obere rechte Ecke fünf Sekunden gedrückt halten (unsichtbare Fläche, seit V1.06 ohne sichtbaren Hannafon-Schriftzug; löscht auch den Familien-Code). Bei offenem Adressbuch nicht erreichbar.
 - Empfänger können unten auf Standby „Dieses Gerät trennen“ tippen: nur dieses Gerät, der Familien-Code bleibt
 - Mehrere Geräte pro Person: jedes Gerät hat eine eigene ID, ein Anruf klingelt überall, das erste Annehmen gewinnt
@@ -37,6 +37,8 @@ npm run test:e2e
 - iOS-Statusleiste (V1.06): `apple-mobile-web-app-status-bar-style` ist `black` (deckend schwarz, helle Uhr/Akku), `theme-color` und Manifest `theme_color` sind fest `#000000` und folgen nicht mehr dem Foto. Nie `black-translucent`: Damit legt iOS 26 seinen Liquid-Glass-Blur über das Foto und WebKit macht Home-Bildschirm-Apps eine Statusleiste zu kurz (Streifen unten, WebKit #313800). Die Fotofarbe am unteren Rand färbt nur noch den Seitenhintergrund. iOS übernimmt die Statusleisten-Einstellung nur beim Hinzufügen zum Home-Bildschirm: Icon löschen und neu hinzufügen.
 - Kamera/Mikrofon (V1.05): Der iOS-Systemdialog lässt sich nicht abschalten. Die App fragt einmal früh (bei „Das bin ich“ bzw. beim ersten Tippen nach dem Start), stoppt die Spuren sofort und fragt nicht, wenn die Berechtigung schon erteilt ist. Dauerhaft still nur, wenn in den iOS-Einstellungen Kamera und Mikrofon auf „Erlauben“ stehen.
 - Klingelton (V1.06): eingehende Anrufe spielen `sounds/ringtone.m4a` (eigener, synthetisch erzeugter Ton, `npm run generate-ringtone`), Web-Audio-Akkord als Fallback. Nach dem ersten Tippen läuft `sounds/keepalive.m4a` (praktisch stumm) in Schleife und hält die iOS-Audio-Sitzung offen, damit ein späterer Anruf ohne neues Tippen klingeln kann; während eines Gesprächs pausiert die Schleife. Grenzen: vor dem allerersten Tippen nach dem Start und bei iPad-Lautstärke null/stumm bleibt es still („Tippen zum Annehmen“).
+- iOS-Statusleiste (V1.07): iOS 26+ ignoriert `theme-color` und die Statusleisten-Meta und nimmt die Farbe der Seite (html/body und fest positionierte Elemente oben). Deshalb sind html, body und `#app` jetzt schwarz (Creme nur noch auf den Bildschirmen darin), in der Home-Bildschirm-App liegt ganz oben ein schwarzer fester Streifen `#statusbar-fill` (mind. 6 px hoch, volle Breite, nur `html.is-standalone`). Dazu `theme-color` schwarz auch für hell/dunkel und Manifest `background_color` `#000000` (schwarzer Startbildschirm). Weiterhin `black`, nie `black-translucent`. Icon löschen und neu hinzufügen, damit iOS Meta und Manifest neu einliest.
+- Display-Rundung (V1.07): nur oben. Auf iPad/iPad mini (`html.is-tablet`: Touch, kurze Bildschirmseite ≥ 600 pt, beide Ausrichtungen) sind die oberen Ecken von `body` und `#app` mit `clamp(18px, 2.7vmin, 26px)` gerundet (ca. 22 px iPad 10, 20 px iPad mini), per `border-radius` + `clip-path`. Weil der Clip auf `body` liegt, rundet er auch den schwarzen Statusleisten-Streifen `#statusbar-fill` mit ab; außerhalb der Rundung ist es schwarz wie der Rahmen. Unten bleibt es eckig (die Hardware rundet dort selbst), auf dem iPhone keine Rundung.
 - Begrüßung (V1.06): „Hallo …, wen willst du anrufen?“ oben rechts, rechtsbündig.
 - Adressbuch und „Zum Foto“ (V1.06): beide unten rechts an derselben Stelle (nur Hanna). „Zurück zum Familienfoto“ bleibt unten links.
 - Kein Pinch-Zoom (V1.06): auf dem iPad (jede Ausrichtung) lässt sich das Foto nicht per Pinch vergrößern, auch kein Seiten-Zoom. Tippen auf ein Gesicht zoomt weiter auf die Person. Auf iPhones hochkant (Empfänger) bleibt Pinch/Verschieben, damit alle Köpfe erreichbar sind.

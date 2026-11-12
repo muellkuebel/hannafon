@@ -1017,6 +1017,17 @@ function computeIosBottomGap({ standalone, screenW, screenH, innerW, innerH, saf
   return gap;
 }
 
+// V1.07: iPad / iPad mini (any orientation): touch screen whose short side is
+// at least 600pt. iPhones (short side <= 440pt) and desktops (no touch) are not.
+function isTabletScreen(t = {}) {
+  if (typeof t.tablet === "boolean") return t.tablet;
+  const touch = (navigator.maxTouchPoints || 0) > 0 || window.matchMedia("(any-pointer: coarse)").matches;
+  if (!touch) return false;
+  const sw = t.screenW ?? window.screen?.width ?? window.innerWidth;
+  const sh = t.screenH ?? window.screen?.height ?? window.innerHeight;
+  return Math.min(sw || 0, sh || 0) >= 600;
+}
+
 let safeProbe = null;
 function readSafeTop() {
   if (!safeProbe) {
@@ -1040,6 +1051,10 @@ function updateViewportFix() {
     safeTop: t.safeTop ?? readSafeTop(),
   });
   const root = document.documentElement;
+  // V1.07: black status-bar strip only in the Home Screen app; simulated
+  // bottom display rounding only on iPad-sized touch screens.
+  root.classList.toggle("is-standalone", Boolean(t.standalone ?? isStandalone()));
+  root.classList.toggle("is-tablet", isTabletScreen(t));
   const prev = root.style.getPropertyValue("--ios-gap");
   const next = `${gap}px`;
   if (prev !== next) {
@@ -1151,8 +1166,10 @@ function visibleEdgeColors() {
 }
 
 function setEdgeColors(top, bottom) {
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta && meta.getAttribute("content") !== STATUS_BAR) meta.setAttribute("content", STATUS_BAR);
+  // V1.07: every theme-color meta (plain, light, dark) stays black.
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+    if (meta.getAttribute("content") !== STATUS_BAR) meta.setAttribute("content", STATUS_BAR);
+  }
   const root = document.documentElement;
   root.style.setProperty("--edge-top", top);
   root.style.setProperty("--edge-bottom", bottom);
