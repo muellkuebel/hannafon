@@ -23,6 +23,9 @@
 :root {
   --cream: #F6EFE3;
   --ink: #2F2118;
+  /* V1.08: missed calls: warm orange (noticeable, not alarm red). */
+  --missed: #E8711A;
+  --missed-ink: #B85A12;
   --ink-soft: rgba(47, 33, 24, 0.72);
   --green-hi: #5dcb7a;
   --green: #1f9a4a;
@@ -92,7 +95,12 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
 
 /* V1.07: solid black strip at the very top of the installed app. iOS 26+
    colours the status bar from a fixed element >= 6px high, >= 80% wide,
-   within 4px of the top. Only in the Home Screen app (html.is-standalone). */
+   within 4px of the top. Only in the Home Screen app (html.is-standalone).
+   V1.08: its height is --bar-h: the real status-bar / safe-area height when
+   iOS lets the page run under the bar, at least 6px. It stays a sharp,
+   full-width black rectangle. */
+html { --bar-h: 0px; }
+html.is-standalone { --bar-h: max(6px, var(--safe-t)); }
 .statusbar-fill {
   display: none;
   position: fixed;
@@ -100,30 +108,25 @@ h1, h2, .zoom-name, .incoming-title, .greeting {
   left: 0;
   right: 0;
   width: 100%;
-  height: max(6px, var(--safe-t));
+  height: var(--bar-h);
   background: #000;
   z-index: 2147483000;
   pointer-events: none;
 }
 html.is-standalone .statusbar-fill { display: block; }
 
-/* V1.07: iPad display rounding, TOP corners only. The physical iPad screen is
-   rounded; at the bottom the hardware curve already does the job, so the
-   bottom stays square in software. At the top the black status bar met the
-   photo with a hard, square edge: the top-left and top-right corners now
-   follow the display curve and the black shows outside it, like the bezel.
-   ~18pt (iPad 10/Air/Pro) to ~21.5pt (mini) on real devices: about 20px on
-   iPad mini, 22px on iPad 10, max 26px. The clip sits on <body> (covers both
-   #app and the full-width black #statusbar-fill, so the strip cannot square
-   off the corners) and on #app (border-radius + clip-path also clips zoomed
-   layers in WebKit). */
+/* iPad display rounding, TOP corners only (the hardware rounds the bottom).
+   V1.08: the whole quarter circle starts flush at the lower edge of the black
+   status bar (--bar-h), so none of it hides under the bar (V1.07 rounded at
+   y=0 and the bar covered most of the curve on a real iPad mini). Only the
+   content (#app) is clipped; the strip stays square and black above it, and
+   the black page shows outside the curve. ~18pt (iPad 10/Air/Pro) to ~21.5pt
+   (mini) on real devices: about 20px on iPad mini, 22px on iPad 10. */
 html.is-tablet {
   --display-r: clamp(18px, 2.7vmin, 26px);
 }
-html.is-tablet body,
 html.is-tablet #app {
-  border-radius: var(--display-r) var(--display-r) 0 0;
-  clip-path: inset(0 round var(--display-r) var(--display-r) 0 0);
+  clip-path: inset(var(--bar-h) 0 0 0 round var(--display-r) var(--display-r) 0 0);
 }
 
 .hidden, [hidden] { display: none !important; }
@@ -614,6 +617,58 @@ html.is-tablet #app {
   box-shadow: 0 4px 12px rgba(31, 154, 74, 0.25);
 }
 
+/* V1.08: missed calls. Name + time stacked; the time line in warm orange. */
+.ab-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ab-text .ab-name { flex: 0 0 auto; }
+.ab-meta {
+  font-family: "Nunito", ui-rounded, system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 750;
+  line-height: 1.2;
+  color: var(--missed-ink);
+}
+.ab-empty {
+  margin: 8vh auto 0;
+  max-width: 640px;
+  text-align: center;
+  font-family: "Fraunces", ui-serif, Georgia, serif;
+  font-weight: 560;
+  font-size: clamp(28px, 3.4vw, 38px);
+  line-height: 1.2;
+  color: var(--ink-soft);
+}
+/* Bottom-left twin of the Adressbuch pill (.corner-pill sits left by default). */
+.corner-pill-left {
+  right: auto;
+  left: calc(22px + var(--safe-l));
+}
+.icon-missed { width: 30px; height: 30px; flex: 0 0 auto; color: var(--missed); }
+.missed-badge {
+  position: absolute;
+  top: -10px;
+  right: -8px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--missed);
+  color: #fff;
+  font-family: "Nunito", ui-rounded, system-ui, sans-serif;
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 3px 10px rgba(196, 92, 18, 0.35), 0 0 0 3px var(--cream);
+}
+#btn-missed.has-missed { box-shadow: 0 8px 22px rgba(47, 33, 24, 0.22), inset 0 0 0 2.5px var(--missed); }
+
 #screen-incoming {
   background: transparent;
   pointer-events: none;
@@ -639,27 +694,62 @@ html.is-tablet #app {
   justify-content: center;
   margin-top: 12px;
 }
+/* V1.08: when Hanna calls, the receiver sees her app-icon portrait on cream,
+   not a zoom of the family photo. */
+#screen-incoming.has-host-icon {
+  background: var(--cream);
+  pointer-events: auto;
+}
+#screen-incoming.has-host-icon .incoming-panel {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 22px;
+  padding: calc(28px + var(--safe-t)) 24px calc(36px + var(--safe-b));
+  pointer-events: auto;
+  background: var(--cream);
+}
+#screen-incoming.has-host-icon .incoming-title {
+  text-shadow: none;
+}
+#screen-incoming.has-host-icon .incoming-host-portrait {
+  width: min(220px, 52vw);
+  height: min(220px, 52vw);
+  animation: incomingIconPulse 1.6s ease-in-out infinite;
+}
+@keyframes incomingIconPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 12px 32px rgba(80, 40, 10, 0.22); }
+  50% { transform: scale(1.04); box-shadow: 0 16px 40px rgba(80, 40, 10, 0.28); }
+}
 
 #screen-call { background: #111; }
+/* V1.08: always the whole camera frame, never cropped. contain = the real
+   aspect (an upright iPhone stays upright on Hanna's iPad), black bars
+   around it like any video call, never cream. */
 #remote-video {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  background: #111;
+  object-fit: contain;
+  background: #000;
 }
+/* Self-view follows the real track shape (--local-ar = videoWidth/videoHeight,
+   set by JS on loadedmetadata/resize), fits inside a max box, contain. */
 #local-video {
+  --local-ar: 0.75;
+  --pip-w: min(28vw, 240px);
+  --pip-h: min(36vh, 300px);
   position: absolute;
   top: calc(18px + var(--safe-t));
   right: calc(18px + var(--safe-r));
-  width: min(28vw, 240px);
+  width: min(var(--pip-w), calc(var(--pip-h) * var(--local-ar)));
   height: auto;
-  aspect-ratio: 3 / 4;
-  object-fit: cover;
-  border-radius: 18px;
+  aspect-ratio: var(--local-ar);
+  object-fit: contain;
+  border-radius: 14px;
   box-shadow: var(--shadow);
-  background: #222;
+  background: #000;
   z-index: 3;
 }
 .call-status {
@@ -803,7 +893,8 @@ html.is-tablet #app {
   .host-portrait { width: min(160px, 42vw); height: min(160px, 42vw); }
   #btn-call-host.pill-xl { min-width: 0; width: min(92vw, 380px); }
   #local-video {
-    width: min(30vw, 120px);
+    --pip-w: min(30vw, 120px);
+    --pip-h: min(26vh, 170px);
     top: calc(12px + var(--safe-t));
     right: calc(12px + var(--safe-r));
   }
@@ -813,6 +904,8 @@ html.is-tablet #app {
   .zoom-name, .incoming-title { font-size: clamp(28px, 8vw, 40px); }
   .zoom-card { width: min(94vw, 520px); bottom: calc(20px + var(--safe-b)); }
   #screen-incoming .incoming-panel { padding-bottom: calc(22px + var(--safe-b)); }
+  #screen-incoming.has-host-icon .incoming-panel { padding: calc(20px + var(--safe-t)) 18px calc(22px + var(--safe-b)); gap: 16px; }
+  #screen-incoming.has-host-icon .incoming-host-portrait { width: min(168px, 48vw); height: min(168px, 48vw); }
   .incoming-actions { gap: 12px; width: min(94vw, 400px); }
   .incoming-actions .pill { flex: 1 1 0; min-width: 0; padding: 0 16px; font-size: 20px; }
   .pill-hangup { bottom: calc(20px + var(--safe-b)); }
@@ -853,4 +946,208 @@ html.is-tablet #app {
   .host-portrait { width: 132px; height: 132px; }
   .incoming-actions { flex-direction: column; align-items: stretch; }
   .incoming-actions .pill { width: 100%; }
+}
+
+/* ------------------------------------------------------------------------
+   V1.09 group calls
+   ------------------------------------------------------------------------ */
+
+/* Zoom card: green "Anrufen" with the cream "Noch jemanden dazu" beside it.
+   The row (not the single pill) is centred. */
+.zoom-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.zoom-actions:not(:has(> :not([hidden]))) { display: none; }
+.pill-add-more {
+  min-height: 64px;
+  padding: 0 28px 0 22px;
+  font-size: 24px;
+  gap: 10px;
+}
+.pill .icon-plus { width: 26px; height: 26px; flex: 0 0 auto; }
+#app.has-back-pill.has-add-more .zoom-card {
+  width: min(680px, calc(100% - 2 * (22px + 200px + 16px)));
+}
+@media (max-width: 960px) {
+  #app.has-back-pill.has-add-more .zoom-card { width: min(94vw, 640px); }
+}
+
+/* Select mode: the photo is shown whole (unzoomed); chosen faces get a green
+   ring and a check. Instruction uses the greeting (top right). */
+.sel-ring {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 3;
+  box-shadow: 0 0 0 4px var(--green), 0 0 0 6px rgba(255, 255, 255, 0.85), 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.sel-check {
+  position: absolute;
+  right: -6%;
+  bottom: -6%;
+  width: 44%;
+  height: 44%;
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.sel-check svg { width: 64%; height: 64%; }
+#app.is-selecting .halo { opacity: 0.55; }
+.select-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(28px + var(--safe-b));
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  justify-content: center;
+  width: min(680px, calc(100% - 2 * (22px + 200px + 16px)));
+}
+.pill-group-call {
+  max-width: 100%;
+  line-height: 1.15;
+  padding-block: 10px;
+  text-align: center;
+}
+.select-hint {
+  position: absolute;
+  left: 50%;
+  bottom: calc(28px + 72px + 22px + var(--safe-b));
+  transform: translateX(-50%);
+  z-index: 7;
+  max-width: min(90vw, 560px);
+  padding: 14px 26px;
+  border-radius: 999px;
+  background: var(--cream);
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 10px 28px rgba(47, 33, 24, 0.24);
+  pointer-events: none;
+}
+@media (max-width: 960px) {
+  .select-bar {
+    width: min(94vw, 640px);
+    bottom: calc(33px + 62px + 18px + var(--safe-b));
+  }
+  .select-hint { bottom: calc(33px + 62px + 18px + 72px + 18px + var(--safe-b)); }
+}
+
+/* Incoming group call: same cream + app-icon screen, a short "mit …" line. */
+.incoming-sub {
+  margin: -8px 0 0;
+  font-size: clamp(24px, 3.6vw, 34px);
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+/* In-call grid: every person whole (contain), black letterbox, never cream
+   behind video, never cropped. Ringing people: cream tile with a letter. */
+.call-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  background: #000;
+  grid-template-columns: 1fr;
+  grid-auto-rows: 1fr;
+  z-index: 1;
+}
+.call-grid[data-count="2"] { grid-template-columns: 1fr 1fr; }
+.call-grid[data-count="3"],
+.call-grid[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.call-grid[data-count="3"] .tile:first-child { grid-column: 1 / span 2; }
+.tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #000;
+}
+.tile video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.tile-name {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  margin: 0;
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 750;
+  z-index: 2;
+}
+.tile.is-ringing {
+  background: var(--cream);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--ink);
+}
+.tile.is-ringing .tile-name {
+  position: static;
+  background: none;
+  color: var(--ink);
+  padding: 0;
+  font-family: "Fraunces", ui-serif, Georgia, serif;
+  font-size: clamp(24px, 3.2vw, 36px);
+  font-weight: 600;
+}
+.tile-avatar {
+  width: clamp(72px, 12vmin, 128px);
+  height: clamp(72px, 12vmin, 128px);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-family: "Fraunces", ui-serif, Georgia, serif;
+  font-size: clamp(34px, 6vmin, 60px);
+  font-weight: 600;
+  box-shadow: var(--shadow);
+  animation: incomingPulse 1.6s ease-in-out infinite;
+}
+.tile-ring {
+  margin: 0;
+  font-size: clamp(18px, 2.4vw, 24px);
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+#screen-call.is-group #remote-video { display: none; }
+#screen-call.is-group .call-status { z-index: 4; }
+
+@media (orientation: portrait) {
+  .call-grid[data-count="2"] { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+}
+@media (max-width: 700px) and (orientation: portrait) {
+  .pill-add-more { min-height: 56px; font-size: 19px; padding: 0 20px 0 16px; }
+  #app.has-back-pill.has-add-more .zoom-card { width: min(94vw, 520px); }
+  .select-bar { width: min(94vw, 520px); bottom: calc(84px + var(--safe-b)); }
+  .select-hint { font-size: 18px; bottom: calc(84px + 64px + 14px + var(--safe-b)); }
+  .tile-name { font-size: 17px; left: 10px; top: 8px; padding: 4px 12px; }
+  /* Keep the lowest tile clear of the red Auflegen pill. */
+  .call-grid { bottom: calc(20px + 64px + 14px + var(--safe-b)); }
+  .incoming-sub { font-size: clamp(20px, 6vw, 28px); }
 }

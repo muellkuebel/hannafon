@@ -32,6 +32,9 @@ import {
   flushIce,
   stopStream,
   closePeer,
+  applySendCaps,
+  readSendCaps,
+  SEND_CAPS,
 } from "./webrtc.js";
 import {
   startRingtone,
@@ -46,6 +49,9 @@ import {
 } from "./audio.js";
 
 const $ = (id) => document.getElementById(id);
+
+// V1.08: local cache of Hanna's missed calls (face numbers + timestamps only).
+const STORAGE_MISSED = "hannafon-missed-v1";
 
 const ui = {
   code: $("screen-code"),
@@ -85,6 +91,8 @@ const ui = {
   btnPushTest: $("btn-push-test"),
   pushStatus: $("push-status"),
   incomingTitle: $("incoming-title"),
+  incomingHostWrap: $("incoming-host-wrap"),
+  incomingHostFace: $("incoming-host-face"),
   ringHint: $("ring-hint"),
   btnAccept: $("btn-accept"),
   btnDecline: $("btn-decline"),
@@ -106,6 +114,18 @@ const ui = {
   abList: $("ab-list"),
   abRowTpl: $("ab-row-tpl"),
   btnAbClose: $("btn-ab-close"),
+  btnMissed: $("btn-missed"),
+  missedBadge: $("missed-badge"),
+  abEmpty: $("ab-empty"),
+  abTitle: document.querySelector("#screen-addressbook .ab-title"),
+  // V1.09 group calls
+  btnAddMore: $("btn-add-more"),
+  selectBar: $("select-bar"),
+  btnGroupCall: $("btn-group-call"),
+  btnGroupCallLabel: $("btn-group-call-label"),
+  selectHint: $("select-hint"),
+  incomingSub: $("incoming-sub"),
+  callGrid: $("call-grid"),
 };
 
 const state = {
@@ -132,16 +152,28 @@ const state = {
   peerDevice: null,
   pendingFromDevice: null,
   gestureMoved: false,
+  // V1.08: missed calls for Hanna ([{ from, count, last }]), worker is the source of truth.
+  missed: loadMissedCache(),
+  bookMode: "all", // "all" (Adressbuch) | "missed" (Verpasste Anrufe)
+  // V1.08: when Hanna calls, the receiver sees the app-icon portrait, not the family photo.
+  incomingShowHostIcon: false,
+  // V1.09: group select mode ({ nrs: [face numbers] }) and the running group call.
+  select: null,
+  group: null,
+  pendingGroup: null,
 };
 
 function showScreen(name) {
-  const showPhoto = name === "photo" || name === "incoming";
+  const incomingUsesIcon = name === "incoming" && !!state.incomingShowHostIcon;
+  const showPhoto = name === "photo" || (name === "incoming" && !incomingUsesIcon);
   for (const key of ["code", "photo", "standby", "incoming", "call"]) {
     const el = ui[key];
     const on = key === name || (key === "photo" && showPhoto);
     el.classList.toggle("hidden", !on);
     el.hidden = !on;
   }
+  ui.incoming?.classList.toggle("has-host-icon", incomingUsesIcon);
+  show(ui.incomingHostWrap, incomingUsesIcon);
   const app = document.getElementById("app");
   app.classList.toggle("is-photo", showPhoto);
   app.classList.toggle("is-in-call", name === "call");
@@ -161,12 +193,20 @@ function updateCornerButtons() {
   const onPhoto = !ui.photo.hidden && ui.incoming.hidden && ui.call.hidden;
   const bookOpen = !ui.addressbook.hidden;
   const zoomed = !!state.zoomed;
-  const canBack = onPhoto && !bookOpen && zoomed && (state.mode === "host" || state.mode === "setup");
+  const selecting = !!state.select;
+  const canBack = onPhoto && !bookOpen && (zoomed || selecting) && (state.mode === "host" || state.mode === "setup");
   const canBook =
-    onPhoto && !bookOpen && !zoomed && state.mode === "host" &&
+    onPhoto && !bookOpen && !zoomed && !selecting && state.mode === "host" &&
     !!state.identity && isHostPerson(state.identity, state.config);
   show(ui.btnBackPhoto, canBack);
   show(ui.btnAddressbook, canBook);
+  // V1.08: "Verpasste Anrufe" bottom left, only while calls are waiting.
+  const missed = missedPeople();
+  show(ui.btnMissed, canBook && missed.length > 0);
+  ui.missedBadge.textContent = String(missed.length);
+  show(ui.missedBadge, missed.length > 0);
+  ui.btnMissed.classList.toggle("has-missed", missed.length > 0);
+  ui.btnMissed.setAttribute("aria-label", `Verpasste Anrufe: ${missed.length}`);
   document.getElementById("app").classList.toggle("has-back-pill", canBack);
 }
 
@@ -201,12 +241,95 @@ function paintAvatar(el, person) {
   el.classList.add("has-photo");
 }
 
+// ---- V1.08 missed calls ---------------------------------------------------
+function sanitizeMissed(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((m) => ({ from: Number(m?.from) || 0, count: Math.max(1, Number(m?.count) || 1), last: Number(m?.last) || 0 }))
+    .filter((m) => m.from > 0 && m.last > 0);
+}
+
+function loadMissedCache() {
+  try {
+    return sanitizeMissed(JSON.parse(localStorage.getItem(STORAGE_MISSED) || "[]"));
+  } catch {
+    return [];
+  }
+}
+
+function saveMissedCache() {
+  try {
+    if (state.missed.length) localStorage.setItem(STORAGE_MISSED, JSON.stringify(state.missed));
+    else localStorage.removeItem(STORAGE_MISSED);
+  } catch {
+    /* ignore */
+  }
+}
+
+// Only for Hanna, only people she can call back (never 7, 12, or herself),
+// newest first, one row per person.
+function missedPeople() {
+  const cfg = state.config;
+  if (!cfg || state.mode !== "host" || !state.identity || !isHostPerson(state.identity, cfg)) return [];
+  const callable = new Set(addressbookPeople().map((p) => Number(p.nr)));
+  return state.missed
+    .filter((m) => callable.has(m.from))
+    .slice()
+    .sort((a, b) => b.last - a.last)
+    .map((m) => ({ ...m, person: personByNr(m.from) }))
+    .filter((m) => m.person);
+}
+
+function onMissed(data) {
+  state.missed = sanitizeMissed(data?.items);
+  saveMissedCache();
+  if (!ui.addressbook.hidden && state.bookMode === "missed") renderAddressbook();
+  updateCornerButtons();
+}
+
+const BERLIN = "Europe/Berlin";
+function berlinDay(ts) {
+  return new Date(ts).toLocaleDateString("de-DE", { timeZone: BERLIN });
+}
+function berlinTime(ts) {
+  return new Date(ts).toLocaleTimeString("de-DE", { timeZone: BERLIN, hour: "2-digit", minute: "2-digit" });
+}
+// "gerade eben", "vor 5 Minuten", "heute 14:30", "gestern 9:05", "Mo., 10.11., 14:30"
+function missedWhen(ts, now = Date.now()) {
+  const min = Math.floor((now - ts) / 60000);
+  if (min < 1) return "gerade eben";
+  if (min < 60) return min === 1 ? "vor 1 Minute" : `vor ${min} Minuten`;
+  if (berlinDay(ts) === berlinDay(now)) return `heute ${berlinTime(ts)}`;
+  if (berlinDay(ts) === berlinDay(now - 86400000)) return `gestern ${berlinTime(ts)}`;
+  const day = new Date(ts).toLocaleDateString("de-DE", { timeZone: BERLIN, weekday: "short", day: "numeric", month: "numeric" });
+  return `${day}, ${berlinTime(ts)}`;
+}
+
+function missedLine(m) {
+  const when = missedWhen(m.last);
+  return m.count > 1 ? `${m.count} Anrufe · ${when}` : when;
+}
+
+let missedTicker = null;
+
 function renderAddressbook() {
   ui.abList.innerHTML = "";
-  for (const p of addressbookPeople()) {
+  const missedMode = state.bookMode === "missed";
+  ui.abTitle.textContent = missedMode ? "Verpasste Anrufe" : "Adressbuch";
+  ui.addressbook.setAttribute("aria-label", missedMode ? "Verpasste Anrufe" : "Adressbuch");
+  ui.addressbook.classList.toggle("is-missed", missedMode);
+  const rows = missedMode ? missedPeople() : addressbookPeople().map((p) => ({ person: p }));
+  show(ui.abEmpty, missedMode && rows.length === 0);
+  for (const entry of rows) {
+    const p = entry.person;
     const row = ui.abRowTpl.content.firstElementChild.cloneNode(true);
     row.dataset.nr = String(p.nr);
     row.querySelector(".ab-name").textContent = p.name;
+    const meta = row.querySelector(".ab-meta");
+    if (missedMode) {
+      meta.textContent = missedLine(entry);
+      row.dataset.count = String(entry.count);
+      show(meta, true);
+    }
     const btn = row.querySelector(".ab-call");
     btn.dataset.nr = String(p.nr);
     btn.setAttribute("aria-label", `${p.name} anrufen`);
@@ -221,28 +344,46 @@ function renderAddressbook() {
   }
 }
 
-function openAddressbook() {
+function openAddressbook(mode = "all") {
   if (state.mode !== "host" || !isHostPerson(state.identity, state.config)) return;
   if (state.zoomed) unzoom();
+  state.bookMode = mode === "missed" ? "missed" : "all";
   show(ui.addressbook, true);
   renderAddressbook();
+  clearInterval(missedTicker);
+  if (state.bookMode === "missed") missedTicker = setInterval(() => {
+    if (!ui.addressbook.hidden && state.bookMode === "missed") renderAddressbook();
+  }, 30000);
   ui.abList.scrollTop = 0;
   document.getElementById("app").classList.add("is-addressbook");
   updateCornerButtons();
   requestEdgeColors();
 }
 
-function closeAddressbook() {
+// V1.08: leaving "Verpasste Anrufe" on purpose (Zum Foto or Anrufen) means
+// Hanna has seen them: clear them here and on the worker, so the button goes
+// away and does not come back after a reload. An incoming call that pushes the
+// list away does not count as leaving.
+function closeAddressbook({ ack = false } = {}) {
   if (!ui.addressbook || ui.addressbook.hidden) return;
+  if (ack && state.bookMode === "missed") acknowledgeMissed();
+  clearInterval(missedTicker);
+  state.bookMode = "all";
   show(ui.addressbook, false);
   document.getElementById("app").classList.remove("is-addressbook");
   updateCornerButtons();
   requestEdgeColors();
 }
 
+function acknowledgeMissed() {
+  state.missed = [];
+  saveMissedCache();
+  state.signaling.send({ type: "missed-clear", nr: 0 });
+}
+
 function callFromAddressbook(person) {
   // Same path as choosing the person on the photo and tapping "Anrufen".
-  closeAddressbook();
+  closeAddressbook({ ack: true });
   startCall(person);
 }
 
@@ -508,6 +649,10 @@ function layoutHits() {
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
       if (state.gestureMoved) return;
+      if (state.select) {
+        toggleSelect(p);
+        return;
+      }
       if (state.zoomed && Number(state.zoomed.nr) !== Number(p.nr)) {
         unzoom();
         return;
@@ -515,6 +660,23 @@ function layoutHits() {
       onPersonTap(p);
     });
     ui.hits.appendChild(btn);
+  }
+  // V1.09: chosen people in select mode: green ring + check on the face.
+  for (const nr of state.select?.nrs || []) {
+    const p = personByNr(nr);
+    if (!p) continue;
+    const f = origToPhoto(p, photo);
+    const rr = f.r * layout.scale * 1.3;
+    const ring = document.createElement("div");
+    ring.className = "sel-ring";
+    ring.dataset.nr = String(p.nr);
+    ring.style.left = `${f.x * layout.scale - rr}px`;
+    ring.style.top = `${f.y * layout.scale - rr}px`;
+    ring.style.width = `${rr * 2}px`;
+    ring.style.height = `${rr * 2}px`;
+    ring.innerHTML =
+      '<span class="sel-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>';
+    ui.hits.appendChild(ring);
   }
 }
 
@@ -636,6 +798,8 @@ function unzoom() {
   clearMask();
   show(ui.btnConfirm, false);
   show(ui.btnCall, false);
+  show(ui.btnAddMore, false);
+  document.getElementById("app").classList.remove("has-add-more");
   show(ui.zoomSoon, false);
   show(ui.zoomCard, false);
   layoutHits();
@@ -652,6 +816,9 @@ async function onPersonTap(person) {
   const isSelf = state.identity && Number(state.identity.nr) === Number(person.nr);
   const canCall = !setup && state.mode === "host" && person.callable && !isHostPerson(person, state.config);
   show(ui.btnCall, canCall);
+  // V1.09: "Noch jemanden dazu" next to Anrufen (group call from the photo).
+  show(ui.btnAddMore, canCall);
+  document.getElementById("app").classList.toggle("has-add-more", canCall);
   show(ui.zoomSoon, !setup && state.mode === "host" && !canCall && !isSelf);
   show(ui.zoomCard, true);
   await applyZoom(person);
@@ -660,6 +827,13 @@ async function onPersonTap(person) {
 function onStageBackground(ev) {
   if (state.gestureMoved) return;
   if (ev.target.closest(".zoom-card, .pill, .sheet")) return;
+  if (state.select) {
+    const picked = Number.isFinite(ev.clientX) && ev.clientX + ev.clientY > 0
+      ? pickPersonAt(ev.clientX, ev.clientY)
+      : null;
+    if (picked) toggleSelect(picked);
+    return;
+  }
   if (state.zoomed) {
     const hit = ev.target.closest(".hit");
     if (hit && Number(hit.dataset.nr) === Number(state.zoomed.nr)) return;
@@ -681,7 +855,10 @@ function setGreeting() {
   const setup = state.mode === "setup";
   show(ui.setupTitle, setup);
   show(ui.greeting, !setup && state.mode === "host");
-  if (!setup && me) {
+  if (!setup && me && state.select) {
+    ui.greet1.textContent = "Wen noch?";
+    ui.greet2.textContent = "Tippe auf alle, die mit dabei sein sollen.";
+  } else if (!setup && me) {
     ui.greet1.textContent = `Hallo ${me.name},`;
     ui.greet2.textContent = "wen willst du anrufen?";
   }
@@ -694,6 +871,14 @@ async function paintHostPortrait() {
   ui.hostFace.alt = host?.name ? `Hannafon · ${host.name}` : "Hannafon";
   ui.hostFaceWrap.classList.add("app-icon-tile");
   show(ui.hostFaceWrap, true);
+}
+
+function paintIncomingHostPortrait(from) {
+  if (!ui.incomingHostFace || !ui.incomingHostWrap) return;
+  const host = from || hostPerson();
+  ui.incomingHostFace.src = "./icons/icon-512.png";
+  ui.incomingHostFace.alt = host?.name || "Hannafon";
+  ui.incomingHostWrap.classList.add("app-icon-tile");
 }
 
 function isStandalone() {
@@ -768,6 +953,8 @@ async function refreshPushUi() {
 
 function goHome() {
   closeAddressbook();
+  state.incomingShowHostIcon = false;
+  clearSelectMode();
   unzoom();
   if (!state.identity) {
     state.mode = "setup";
@@ -945,7 +1132,17 @@ ui.stage.addEventListener("click", onStageBackground);
 
 ui.btnBackPhoto.addEventListener("click", (ev) => {
   ev.stopPropagation();
-  if (state.zoomed) unzoom();
+  // V1.09: in select mode "Zum Foto" cancels the group and clears the choice.
+  if (state.select) exitSelectMode();
+  else if (state.zoomed) unzoom();
+});
+ui.btnAddMore.addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  if (state.zoomed) enterSelectMode(state.zoomed);
+});
+ui.btnGroupCall.addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  startFromSelection();
 });
 ui.btnAddressbook.addEventListener("click", (ev) => {
   ev.stopPropagation();
@@ -953,7 +1150,11 @@ ui.btnAddressbook.addEventListener("click", (ev) => {
 });
 ui.btnAbClose.addEventListener("click", (ev) => {
   ev.stopPropagation();
-  closeAddressbook();
+  closeAddressbook({ ack: true });
+});
+ui.btnMissed.addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  openAddressbook("missed");
 });
 
 function viewportKey() {
@@ -1076,6 +1277,23 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) onViewportChange();
 });
 window.visualViewport?.addEventListener("resize", onViewportChange);
+
+// V1.08: the self-view box takes the real shape of the camera frame (portrait
+// or landscape, it changes when the device rotates), so contain shows the whole
+// frame without bars inside the small tile.
+function syncLocalAspect() {
+  const v = ui.localVideo;
+  if (!v?.videoWidth || !v?.videoHeight) return;
+  v.style.setProperty("--local-ar", String(v.videoWidth / v.videoHeight));
+  v.dataset.aspect = v.videoWidth > v.videoHeight ? "landscape" : v.videoWidth < v.videoHeight ? "portrait" : "square";
+}
+for (const ev of ["loadedmetadata", "resize"]) ui.localVideo.addEventListener(ev, syncLocalAspect);
+function syncRemoteAspect() {
+  const v = ui.remoteVideo;
+  if (!v?.videoWidth || !v?.videoHeight) return;
+  v.dataset.aspect = v.videoWidth > v.videoHeight ? "landscape" : v.videoWidth < v.videoHeight ? "portrait" : "square";
+}
+for (const ev of ["loadedmetadata", "resize"]) ui.remoteVideo.addEventListener(ev, syncRemoteAspect);
 
 // ---------------------------------------------------------------------------
 // Status bar + page edge colours (V1.05, V1.06)
@@ -1244,6 +1462,7 @@ async function fullReset() {
   localStorage.removeItem(STORAGE_CODE);
   localStorage.removeItem(STORAGE_IDENTITY);
   localStorage.removeItem(STORAGE_DEVICE);
+  localStorage.removeItem(STORAGE_MISSED);
   await clearMediaCache();
   revokeMedia();
   location.reload();
@@ -1256,9 +1475,17 @@ function connectSignaling() {
   state.signaling.on("offer", onRemoteCall);
   state.signaling.on("answer", onRemoteAnswer);
   state.signaling.on("ice", onRemoteIce);
-  state.signaling.on("hangup", () => hangup(true));
+  state.signaling.on("hangup", onRemoteHangup);
+  state.signaling.on("declined", onRemoteDeclined);
+  state.signaling.on("peer-join", onPeerJoin);
+  state.signaling.on("peer-offer", onPeerOffer);
+  state.signaling.on("peer-answer", onPeerAnswer);
+  state.signaling.on("peer-ice", onPeerIce);
+  state.signaling.on("peer-leave", onPeerLeave);
+  state.signaling.on("group-state", onGroupState);
   state.signaling.on("reject", () => hangup(true));
   state.signaling.on("taken", onCallTakenElsewhere);
+  state.signaling.on("missed", onMissed);
 }
 
 function onCallTakenElsewhere() {
@@ -1289,7 +1516,11 @@ function peerHandlers(peerNr) {
       ui.remoteVideo.play().catch(() => {});
     },
     onState: (s) => {
-      if (s === "connected") ui.callStatus.textContent = "";
+      if (s === "connected") {
+        ui.callStatus.textContent = "";
+        // V1.09: (re)apply the 1:1 send cap once negotiated (WebKit).
+        if (state.pc && !state.group) applySendCaps(state.pc, 1);
+      }
       if (s === "failed" || s === "disconnected") {
         ui.callStatus.textContent = "Verbindung unterbrochen";
       }
@@ -1328,6 +1559,7 @@ async function startCall(person) {
     state.pc = createPeer(state.config.iceServers, state.localStream, peerHandlers(person.nr));
     const offer = await state.pc.createOffer();
     await state.pc.setLocalDescription(offer);
+    applySendCaps(state.pc, 1);
     state.signaling.send({
       type: "call",
       to: person.nr,
@@ -1342,6 +1574,8 @@ async function startCall(person) {
 }
 
 function onRemoteCall(data) {
+  // V1.09: nothing interrupts a running group call.
+  if (state.group) return;
   if (state.inCallWith && !state.outgoing) return;
   if (!data?.sdp) return;
   const from = personByNr(data.from);
@@ -1365,12 +1599,30 @@ function onRemoteCall(data) {
   state.pendingIce = [];
   for (const c of data.ice || []) queuePendingIce(c);
   ui.incomingTitle.textContent = `${from?.name || "Jemand"} ruft an`;
+  // V1.09: group call: remember the group and name the other invitees.
+  state.pendingGroup = data.group && data.group.id ? data.group : null;
+  const others = (state.pendingGroup?.members || [])
+    .map(Number)
+    .filter((nr) => nr && nr !== Number(state.identity?.nr) && nr !== Number(from?.nr))
+    .map((nr) => personByNr(nr)?.name)
+    .filter(Boolean);
+  ui.incomingSub.textContent = others.length ? `mit ${joinNames(others)}` : "";
+  show(ui.incomingSub, others.length > 0);
   show(ui.zoomCard, false);
-  showScreen("incoming");
-  applyStageLayout();
-  if (from) {
-    state.zoomed = from;
-    applyZoom(from);
+  // When Hanna calls, show her app-icon portrait on cream — never a zoom of the family photo.
+  const fromHost = !!(from && isHostPerson(from, state.config));
+  state.incomingShowHostIcon = fromHost;
+  if (fromHost) {
+    if (state.zoomed) unzoom();
+    paintIncomingHostPortrait(from);
+    showScreen("incoming");
+  } else {
+    showScreen("incoming");
+    applyStageLayout();
+    if (from) {
+      state.zoomed = from;
+      applyZoom(from);
+    }
   }
   beginIncomingRing();
 }
@@ -1389,6 +1641,10 @@ async function beginIncomingRing() {
 }
 
 async function onRemoteAnswer(data) {
+  if (state.group) {
+    await onGroupAnswer(data);
+    return;
+  }
   if (!state.pc || !data.sdp) return;
   await state.pc.setRemoteDescription(data.sdp);
   await flushIce(state.pc);
@@ -1415,6 +1671,11 @@ function dropLocalCall() {
 }
 
 async function onRemoteIce(data) {
+  if (state.group) {
+    const p = groupPeer(data.from);
+    if (p?.pc && data.candidate) await addIce(p.pc, data.candidate);
+    return;
+  }
   // V1.06: before Annehmen there is no peer yet; keep the caller's candidates.
   if (!state.pc && data.candidate && state.pendingFrom && Number(data.from) === Number(state.pendingFrom.nr)) {
     queuePendingIce(data.candidate);
@@ -1434,26 +1695,56 @@ async function acceptIncoming() {
   if (!from || !offer) return;
   state.inCallWith = from;
   state.outgoing = false;
+  state.incomingShowHostIcon = false;
+  // V1.09: joining a group call (Hanna plus others, mesh).
+  const grp = state.pendingGroup;
+  state.pendingGroup = null;
+  if (grp) {
+    state.group = {
+      id: grp.id,
+      isHost: false,
+      hostNr: Number(from.nr),
+      peers: new Map(),
+      ready: false,
+      waiters: [],
+      iceWait: new Map(),
+    };
+    ensureGroupPeer(from.nr, { status: "joined", device: state.pendingFromDevice || null });
+  }
   showScreen("call");
+  renderGrid();
   ui.callStatus.textContent = "Verbinden…";
   try {
     state.localStream = await getLocalStream();
     ui.localVideo.srcObject = state.localStream;
-    state.pc = createPeer(state.config.iceServers, state.localStream, peerHandlers(from.nr));
+    const g = state.group && grp && state.group.id === grp.id ? state.group : null;
+    state.pc = createPeer(
+      state.config.iceServers,
+      state.localStream,
+      g ? groupPeerHandlers(from.nr) : peerHandlers(from.nr)
+    );
+    if (g) groupPeer(from.nr).pc = state.pc;
     await state.pc.setRemoteDescription(offer);
     for (const c of state.pendingIce || []) await addIce(state.pc, c);
     state.pendingIce = [];
     await flushIce(state.pc);
     const answer = await state.pc.createAnswer();
     await state.pc.setLocalDescription(answer);
+    applySendCaps(state.pc, g ? groupRemoteCount() : 1);
     state.signaling.send({
       type: "answer",
       to: from.nr,
       toDevice: state.pendingFromDevice,
       fromDevice: getDeviceId(),
+      callId: state.pendingCallId || undefined,
       sdp: state.pc.localDescription,
     });
     state.peerDevice = state.pendingFromDevice;
+    if (g && state.group === g) {
+      g.ready = true;
+      const waiting = g.waiters.splice(0);
+      for (const fn of waiting) fn();
+    }
   } catch {
     ui.callStatus.textContent = "Kamera oder Mikrofon nicht verfügbar";
   }
@@ -1464,8 +1755,9 @@ ui.btnDecline.addEventListener("click", () => {
   show(ui.ringHint, false);
   ui.incoming?.classList.remove("is-waiting-audio");
   if (state.pendingFrom) {
-    state.signaling.send({ type: "reject", to: state.pendingFrom.nr });
+    state.signaling.send({ type: "reject", to: state.pendingFrom.nr, callId: state.pendingCallId || undefined });
   }
+  state.pendingGroup = null;
   state.pendingFrom = null;
   state.pendingOffer = null;
   state.pendingCallId = null;
@@ -1477,9 +1769,35 @@ ui.btnHangup.addEventListener("click", () => hangup(false));
 
 function hangup(remote) {
   stopRingtone();
-  if (!remote && state.inCallWith) {
+  const g = state.group;
+  if (!remote && g) {
+    // V1.09: Hanna ends the whole group call (ringing ones get a hangup too,
+    // which the Worker records as missed). A guest only leaves: hangup to
+    // Hanna, peer-leave to everyone else.
+    if (g.isHost) {
+      for (const p of g.peers.values()) {
+        state.signaling.send({ type: "hangup", to: p.nr, fromDevice: getDeviceId(), callId: g.id });
+      }
+    } else {
+      state.signaling.send({ type: "hangup", to: g.hostNr, fromDevice: getDeviceId(), callId: g.id });
+      for (const p of g.peers.values()) {
+        if (p.nr === g.hostNr) continue;
+        state.signaling.send({ type: "peer-leave", to: p.nr, toDevice: p.device || undefined, groupId: g.id });
+      }
+    }
+  } else if (!remote && state.inCallWith) {
     state.signaling.send({ type: "hangup", to: state.inCallWith.nr, fromDevice: getDeviceId() });
   }
+  if (g) {
+    for (const p of g.peers.values()) {
+      clearTimeout(p.ring);
+      if (p.pc !== state.pc) closePeer(p.pc);
+    }
+  }
+  state.group = null;
+  state.pendingGroup = null;
+  renderGrid();
+  show(ui.incomingSub, false);
   closePeer(state.pc);
   state.pc = null;
   stopStream(state.localStream);
@@ -1497,6 +1815,553 @@ function hangup(remote) {
   state.peerDevice = null;
   state.callId = null;
   if (state.identity && state.config) goHome();
+}
+
+// ---------------------------------------------------------------------------
+// V1.09 group calls (Hanna + up to three others, mesh, STUN only)
+//
+// Signalling:
+// - Hanna sends a normal "call" (with group: { id, members }) to every
+//   invitee, one RTCPeerConnection each. Ringing, push, replay, taken and
+//   missed work exactly like a 1:1 call, per person.
+// - When an invitee answers, Hanna tells every guest already in the call
+//   ("peer-join"). The EXISTING guest offers to the newcomer ("peer-offer" →
+//   "peer-answer", "peer-ice"), so each pair negotiates once, no glare.
+// - Hanna broadcasts the roster ("group-state": ringing / joined) so every
+//   guest shows the same tiles. A guest leaving sends "hangup" to Hanna and
+//   "peer-leave" to the others; Hanna's Auflegen hangs up on everyone.
+const GROUP_MAX_OTHERS = 3;
+let groupRingMs = 60000; // unanswered invitee: tile goes, Worker counts a missed call
+
+function joinNames(names) {
+  const n = (names || []).filter(Boolean);
+  if (n.length <= 1) return n[0] || "";
+  return `${n.slice(0, -1).join(", ")} und ${n[n.length - 1]}`;
+}
+
+function canSelect(person) {
+  return !!(person && isTappable(person) && person.callable && !isHostPerson(person, state.config));
+}
+
+// ---- select mode on the photo ----------------------------------------------
+function enterSelectMode(first) {
+  if (state.mode !== "host" || !canSelect(first)) return;
+  state.select = { nrs: [Number(first.nr)] };
+  document.getElementById("app").classList.add("is-selecting");
+  unzoom();
+  setGreeting();
+  renderSelection();
+}
+
+function renderSelection() {
+  const sel = state.select;
+  show(ui.selectBar, !!sel);
+  if (!sel) return;
+  const names = sel.nrs.map((nr) => personByNr(nr)?.name || "");
+  ui.btnGroupCallLabel.textContent = `${joinNames(names)} anrufen`;
+  ui.btnGroupCall.dataset.nrs = sel.nrs.join(",");
+  layoutHits();
+  updateCornerButtons();
+}
+
+function toggleSelect(person) {
+  const sel = state.select;
+  if (!sel || !canSelect(person)) return;
+  const nr = Number(person.nr);
+  const i = sel.nrs.indexOf(nr);
+  if (i >= 0) {
+    if (sel.nrs.length > 1) sel.nrs.splice(i, 1); // at least one stays chosen
+  } else if (sel.nrs.length >= GROUP_MAX_OTHERS) {
+    showSelectHint("Höchstens drei Personen auf einmal.");
+    return;
+  } else {
+    sel.nrs.push(nr);
+  }
+  show(ui.selectHint, false);
+  renderSelection();
+}
+
+let selectHintTimer = null;
+function showSelectHint(text) {
+  ui.selectHint.textContent = text;
+  show(ui.selectHint, true);
+  clearTimeout(selectHintTimer);
+  selectHintTimer = setTimeout(() => show(ui.selectHint, false), 2600);
+}
+
+// Leave select mode without touching the rest of the screen.
+function clearSelectMode() {
+  if (!state.select) return false;
+  state.select = null;
+  document.getElementById("app").classList.remove("is-selecting");
+  show(ui.selectBar, false);
+  show(ui.selectHint, false);
+  return true;
+}
+
+function exitSelectMode() {
+  if (!clearSelectMode()) return;
+  setGreeting();
+  layoutHits();
+  updateCornerButtons();
+}
+
+function startFromSelection() {
+  const sel = state.select;
+  if (!sel || !sel.nrs.length) return;
+  const people = sel.nrs.map(personByNr).filter(canSelect);
+  exitSelectMode();
+  if (people.length === 1) startCall(people[0]); // one person: the familiar 1:1 call
+  else if (people.length > 1) startGroupCall(people);
+}
+
+// ---- call state ----------------------------------------------------------------
+function groupPeer(nr) {
+  return state.group?.peers.get(Number(nr)) || null;
+}
+
+function ensureGroupPeer(nr, { status = "joined", device = null } = {}) {
+  const g = state.group;
+  if (!g) return null;
+  const key = Number(nr);
+  let p = g.peers.get(key);
+  if (!p) {
+    p = { nr: key, status, device, pc: null, stream: null, ring: null, conn: "" };
+    g.peers.set(key, p);
+  } else if (device && !p.device) {
+    p.device = device;
+  }
+  return p;
+}
+
+// Everyone else in the call (ringing included): sets the per-stream cap.
+function groupRemoteCount() {
+  return state.group ? Math.max(1, state.group.peers.size) : 1;
+}
+
+function applyGroupCaps() {
+  const g = state.group;
+  if (!g) return;
+  const n = groupRemoteCount();
+  for (const p of g.peers.values()) if (p.pc) applySendCaps(p.pc, n);
+}
+
+function groupPeerHandlers(nr) {
+  const peerNr = Number(nr);
+  return {
+    onIce: (candidate) => {
+      const g = state.group;
+      if (!g) return;
+      const p = groupPeer(peerNr);
+      // Hanna <-> guest ICE uses the normal "ice" (kept with the ringing offer
+      // for push replay); guest <-> guest uses "peer-ice".
+      const viaCall = g.isHost || peerNr === Number(g.hostNr);
+      state.signaling.send({
+        type: viaCall ? "ice" : "peer-ice",
+        to: peerNr,
+        toDevice: p?.device || undefined,
+        fromDevice: getDeviceId(),
+        groupId: g.id,
+        candidate,
+      });
+    },
+    onTrack: (stream) => {
+      const p = groupPeer(peerNr);
+      if (!p) return;
+      p.stream = stream;
+      renderGrid();
+    },
+    onState: (s) => {
+      const p = groupPeer(peerNr);
+      if (!p) return;
+      p.conn = s;
+      if (s === "connected") {
+        ui.callStatus.textContent = "";
+        applySendCaps(p.pc, groupRemoteCount());
+      }
+    },
+  };
+}
+
+async function startGroupCall(people) {
+  if (!state.identity || !isHostPerson(state.identity, state.config)) return;
+  const list = (people || []).filter(canSelect).slice(0, GROUP_MAX_OTHERS);
+  if (list.length < 2) {
+    if (list[0]) startCall(list[0]);
+    return;
+  }
+  hangup(false);
+  const id = (crypto.randomUUID && crypto.randomUUID()) || `g-${Date.now()}`;
+  const members = list.map((p) => Number(p.nr));
+  const g = {
+    id,
+    isHost: true,
+    hostNr: Number(state.identity.nr),
+    peers: new Map(),
+    ready: true,
+    waiters: [],
+    iceWait: new Map(),
+  };
+  state.group = g;
+  state.callId = id;
+  state.inCallWith = list[0];
+  state.outgoing = true;
+  state.peerDevice = null;
+  for (const nr of members) ensureGroupPeer(nr, { status: "ringing" });
+  showScreen("call");
+  ui.callStatus.textContent = "";
+  renderGrid();
+  try {
+    const stream = await getLocalStream();
+    if (state.group !== g) {
+      stopStream(stream);
+      return;
+    }
+    state.localStream = stream;
+    ui.localVideo.srcObject = stream;
+    for (const nr of members) {
+      const p = groupPeer(nr);
+      if (!p || state.group !== g) continue;
+      p.pc = createPeer(state.config.iceServers, stream, groupPeerHandlers(nr));
+      const offer = await p.pc.createOffer();
+      await p.pc.setLocalDescription(offer);
+      applySendCaps(p.pc, members.length);
+      state.signaling.send({
+        type: "call",
+        to: nr,
+        fromDevice: getDeviceId(),
+        fromName: state.identity.name,
+        callId: id,
+        group: { id, members },
+        sdp: p.pc.localDescription,
+      });
+      p.ring = setTimeout(() => onGroupRingTimeout(g, nr), groupRingMs);
+    }
+  } catch {
+    ui.callStatus.textContent = "Kamera oder Mikrofon nicht verfügbar";
+  }
+}
+
+function onGroupRingTimeout(g, nr) {
+  if (state.group !== g) return;
+  const p = groupPeer(nr);
+  if (!p || p.status !== "ringing") return;
+  // The hangup ends the ring on all of that person's devices; the Worker
+  // records it as missed (nobody declined).
+  groupDropPeer(nr, { sendHangup: true });
+}
+
+// Remove one person from the call (declined, timed out, left).
+function groupDropPeer(nr, { sendHangup = false } = {}) {
+  const g = state.group;
+  if (!g) return;
+  const key = Number(nr);
+  const p = g.peers.get(key);
+  if (!p) return;
+  clearTimeout(p.ring);
+  if (sendHangup) {
+    state.signaling.send({ type: "hangup", to: key, fromDevice: getDeviceId(), callId: g.id });
+  }
+  if (p.pc !== state.pc || g.isHost) closePeer(p.pc);
+  g.peers.delete(key);
+  g.iceWait.delete(key);
+  if (g.isHost) {
+    if (!g.peers.size) {
+      hangup(true); // nobody left
+      return;
+    }
+    broadcastGroupState();
+  } else if (key === Number(g.hostNr)) {
+    hangup(true);
+    return;
+  }
+  applyGroupCaps();
+  renderGrid();
+}
+
+function groupRoster() {
+  return [...(state.group?.peers.values() || [])].map((p) => ({ nr: p.nr, state: p.status }));
+}
+
+function broadcastGroupState() {
+  const g = state.group;
+  if (!g?.isHost) return;
+  const members = groupRoster();
+  for (const p of g.peers.values()) {
+    if (p.status !== "joined") continue;
+    state.signaling.send({ type: "group-state", to: p.nr, toDevice: p.device || undefined, groupId: g.id, members });
+  }
+}
+
+// Hanna: an invitee answered.
+async function onGroupAnswer(data) {
+  const g = state.group;
+  if (!g?.isHost || !data?.sdp) return;
+  const p = groupPeer(data.from);
+  if (!p || !p.pc || p.status === "joined") return;
+  clearTimeout(p.ring);
+  p.status = "joined";
+  p.device = data.fromDevice || null;
+  const before = [...g.peers.values()].filter((q) => q.status === "joined" && q.nr !== p.nr);
+  try {
+    await p.pc.setRemoteDescription(data.sdp);
+    await flushIce(p.pc);
+  } catch {
+    /* connection state shows it */
+  }
+  if (state.group !== g) return;
+  // Mesh: guests already in the call connect to the newcomer.
+  for (const q of before) {
+    state.signaling.send({
+      type: "peer-join",
+      to: q.nr,
+      toDevice: q.device || undefined,
+      groupId: g.id,
+      nr: p.nr,
+      device: p.device || undefined,
+    });
+  }
+  broadcastGroupState();
+  applyGroupCaps();
+  renderGrid();
+}
+
+function onRemoteHangup(data) {
+  const g = state.group;
+  if (!g) {
+    hangup(true);
+    return;
+  }
+  const from = Number(data?.from);
+  if (!g.isHost && from === Number(g.hostNr)) {
+    hangup(true); // Hanna ended the group call
+    return;
+  }
+  if (g.peers.has(from)) groupDropPeer(from);
+}
+
+// Worker: every device of that person declined. Group: drop the tile and end
+// the ring (no missed call, she noticed). 1:1 keeps waiting as before.
+function onRemoteDeclined(data) {
+  const g = state.group;
+  if (!g?.isHost) return;
+  const p = groupPeer(data?.from);
+  if (p && p.status === "ringing") groupDropPeer(p.nr, { sendHangup: true });
+}
+
+function groupMsgOk(data) {
+  const g = state.group;
+  return !!(g && !g.isHost && data && data.groupId === g.id && Number(data.from) !== Number(state.identity?.nr));
+}
+
+function drainGroupIce(nr) {
+  const g = state.group;
+  const p = groupPeer(nr);
+  if (!g || !p?.pc) return;
+  const list = g.iceWait.get(Number(nr)) || [];
+  g.iceWait.delete(Number(nr));
+  for (const c of list) addIce(p.pc, c);
+}
+
+// Existing guest: Hanna says someone new joined → offer to them.
+async function onPeerJoin(data) {
+  if (!groupMsgOk(data)) return;
+  const g = state.group;
+  if (Number(data.from) !== Number(g.hostNr)) return;
+  if (!g.ready) {
+    g.waiters.push(() => onPeerJoin(data));
+    return;
+  }
+  const nr = Number(data.nr);
+  if (!nr || nr === Number(state.identity?.nr) || nr === Number(g.hostNr)) return;
+  const p = ensureGroupPeer(nr, { status: "joined", device: data.device || null });
+  if (data.device) p.device = data.device;
+  p.status = "joined";
+  if (p.pc) return;
+  p.pc = createPeer(state.config.iceServers, state.localStream, groupPeerHandlers(nr));
+  drainGroupIce(nr);
+  renderGrid();
+  try {
+    const offer = await p.pc.createOffer();
+    await p.pc.setLocalDescription(offer);
+    applyGroupCaps();
+    state.signaling.send({
+      type: "peer-offer",
+      to: nr,
+      toDevice: p.device || undefined,
+      fromDevice: getDeviceId(),
+      groupId: g.id,
+      sdp: p.pc.localDescription,
+    });
+  } catch {
+    /* tile stays black with the name */
+  }
+}
+
+// Newcomer: an existing guest offers.
+async function onPeerOffer(data) {
+  if (!groupMsgOk(data) || !data.sdp) return;
+  const g = state.group;
+  if (!g.ready) {
+    g.waiters.push(() => onPeerOffer(data));
+    return;
+  }
+  const nr = Number(data.from);
+  if (nr === Number(g.hostNr)) return;
+  const p = ensureGroupPeer(nr, { status: "joined", device: data.fromDevice || null });
+  if (data.fromDevice) p.device = data.fromDevice;
+  p.status = "joined";
+  if (p.pc) closePeer(p.pc);
+  p.pc = createPeer(state.config.iceServers, state.localStream, groupPeerHandlers(nr));
+  renderGrid();
+  try {
+    await p.pc.setRemoteDescription(data.sdp);
+    drainGroupIce(nr);
+    await flushIce(p.pc);
+    const answer = await p.pc.createAnswer();
+    await p.pc.setLocalDescription(answer);
+    applyGroupCaps();
+    state.signaling.send({
+      type: "peer-answer",
+      to: nr,
+      toDevice: p.device || undefined,
+      fromDevice: getDeviceId(),
+      groupId: g.id,
+      sdp: p.pc.localDescription,
+    });
+  } catch {
+    /* tile stays black with the name */
+  }
+}
+
+async function onPeerAnswer(data) {
+  if (!groupMsgOk(data) || !data.sdp) return;
+  const p = groupPeer(data.from);
+  if (!p?.pc || p.pc.signalingState !== "have-local-offer") return;
+  try {
+    await p.pc.setRemoteDescription(data.sdp);
+    await flushIce(p.pc);
+  } catch {
+    /* ignore */
+  }
+}
+
+function onPeerIce(data) {
+  if (!groupMsgOk(data) || !data.candidate) return;
+  const g = state.group;
+  const p = groupPeer(data.from);
+  if (p?.pc) {
+    addIce(p.pc, data.candidate);
+    return;
+  }
+  const key = Number(data.from);
+  const list = g.iceWait.get(key) || [];
+  if (list.length < 60) list.push(data.candidate);
+  g.iceWait.set(key, list);
+}
+
+function onPeerLeave(data) {
+  if (!groupMsgOk(data)) return;
+  const nr = Number(data.from);
+  if (nr === Number(state.group.hostNr)) return;
+  groupDropPeer(nr);
+}
+
+// Guests: Hanna's roster (who rings, who is in). Anyone missing is gone.
+function onGroupState(data) {
+  if (!groupMsgOk(data)) return;
+  const g = state.group;
+  if (Number(data.from) !== Number(g.hostNr)) return;
+  const me = Number(state.identity?.nr);
+  const listed = new Set();
+  for (const m of data.members || []) {
+    const nr = Number(m.nr);
+    if (!nr || nr === me || nr === Number(g.hostNr)) continue;
+    listed.add(nr);
+    const p = ensureGroupPeer(nr, { status: m.state === "joined" ? "joined" : "ringing" });
+    if (m.state === "joined") p.status = "joined";
+  }
+  for (const p of [...g.peers.values()]) {
+    if (p.nr !== Number(g.hostNr) && !listed.has(p.nr)) groupDropPeer(p.nr);
+  }
+  if (state.group !== g) return;
+  applyGroupCaps();
+  renderGrid();
+}
+
+// ---- in-call grid ------------------------------------------------------------
+function makeTile(p) {
+  const person = personByNr(p.nr);
+  const name = person?.name || "";
+  const tile = document.createElement("div");
+  tile.className = "tile";
+  tile.dataset.nr = String(p.nr);
+  const label = document.createElement("p");
+  label.className = "tile-name";
+  label.textContent = name;
+  if (p.status === "ringing") {
+    tile.dataset.kind = "ringing";
+    tile.classList.add("is-ringing");
+    const av = document.createElement("span");
+    av.className = "tile-avatar";
+    av.textContent = String(name || "?").trim().charAt(0).toUpperCase();
+    av.style.background = AVATAR_TINTS[Number(p.nr) % AVATAR_TINTS.length];
+    const ring = document.createElement("p");
+    ring.className = "tile-ring";
+    ring.textContent = "klingelt…";
+    tile.append(av, label, ring);
+  } else {
+    tile.dataset.kind = "video";
+    const v = document.createElement("video");
+    v.autoplay = true;
+    v.playsInline = true;
+    v.setAttribute("playsinline", "");
+    v.setAttribute("webkit-playsinline", "");
+    tile.append(v, label);
+  }
+  return tile;
+}
+
+function renderGrid() {
+  const grid = ui.callGrid;
+  if (!grid) return;
+  const g = state.group;
+  if (!g) {
+    for (const v of grid.querySelectorAll("video")) v.srcObject = null;
+    grid.innerHTML = "";
+    show(grid, false);
+    ui.call.classList.remove("is-group");
+    return;
+  }
+  ui.call.classList.add("is-group");
+  show(grid, true);
+  const peers = [...g.peers.values()];
+  const want = new Set(peers.map((p) => String(p.nr)));
+  for (const t of [...grid.children]) {
+    if (!want.has(t.dataset.nr)) {
+      const v = t.querySelector("video");
+      if (v) v.srcObject = null;
+      t.remove();
+    }
+  }
+  peers.forEach((p, i) => {
+    let tile = grid.querySelector(`.tile[data-nr="${p.nr}"]`);
+    const kind = p.status === "ringing" ? "ringing" : "video";
+    if (tile && tile.dataset.kind !== kind) {
+      tile.remove();
+      tile = null;
+    }
+    if (!tile) tile = makeTile(p);
+    if (grid.children[i] !== tile) grid.insertBefore(tile, grid.children[i] || null);
+    if (kind === "video") {
+      const v = tile.querySelector("video");
+      if (p.stream && v.srcObject !== p.stream) {
+        v.srcObject = p.stream;
+        v.play().catch(() => {});
+      }
+    }
+  });
+  grid.dataset.count = String(peers.length);
 }
 
 ui.btnNotify.addEventListener("click", async () => {
@@ -1573,6 +2438,8 @@ async function disconnectThisDevice() {
     /* ignore */
   }
   localStorage.removeItem(STORAGE_IDENTITY);
+  localStorage.removeItem(STORAGE_MISSED);
+  state.missed = [];
   state.identity = null;
   state.mode = "setup";
   show(ui.disconnectSheet, false);
@@ -1690,6 +2557,7 @@ tryStoredCode();
 
 window.__hannafonTest = {
   ready: () => !!(state.config && state.layout && ui.sharp?.naturalWidth),
+  localStream: () => state.localStream,
   facePoint(nr) {
     const p = personByNr(nr);
     const f = faceStackPoint(p);
@@ -1728,6 +2596,13 @@ window.__hannafonTest = {
     return pt ? { x: pt.x, y: pt.y, r: f.r * (currentView().s || 1), nr: p.nr, name: p.name, onScreen: !!on } : null;
   },
   addressbookNrs: () => addressbookPeople().map((p) => p.nr),
+  missed: () => missedPeople().map((m) => ({ from: m.from, count: m.count, last: m.last })),
+  missedRaw: () => state.missed.slice(),
+  injectMissed: (items) => onMissed({ items }),
+  openMissed: () => openAddressbook("missed"),
+  resyncMissed: () => { state.missed = []; saveMissedCache(); updateCornerButtons(); state.signaling.reconnect(); },
+  missedWhen: (ts, now) => missedWhen(ts, now),
+  clearMissedAll: () => { state.missed = []; saveMissedCache(); state.signaling.send({ type: "missed-clear", nr: 0 }); updateCornerButtons(); },
   pickAt(x, y) {
     const p = pickPersonAt(x, y);
     return p ? { nr: p.nr, name: p.name } : null;
@@ -1781,6 +2656,7 @@ window.__hannafonTest = {
     expecting: state.expectIncoming ? state.expectIncoming.from : null,
     inCallWith: state.inCallWith?.nr || null,
     outgoing: !!state.outgoing,
+    showHostIcon: !!state.incomingShowHostIcon,
   }),
   expectIncoming: (nr) => expectIncoming(nr),
   dropSocket: () => {
@@ -1799,4 +2675,33 @@ window.__hannafonTest = {
     state.signaling.reconnect();
   },
   photoScale: () => ({ ...currentView(), navUser: !!state.navUser }),
+  // V1.09 group calls + send caps
+  joinNames: (names) => joinNames(names),
+  selectState: () => (state.select ? { nrs: state.select.nrs.slice() } : null),
+  setGroupRingMs: (ms) => { groupRingMs = Number(ms) || 60000; },
+  groupState: () => {
+    const g = state.group;
+    if (!g) return null;
+    return {
+      id: g.id,
+      isHost: g.isHost,
+      hostNr: g.hostNr,
+      peers: [...g.peers.values()].map((p) => ({
+        nr: p.nr,
+        status: p.status,
+        hasPc: !!p.pc,
+        conn: p.pc ? p.pc.connectionState : "",
+        live: !!p.stream && p.stream.getVideoTracks().some((t) => t.readyState === "live"),
+      })),
+    };
+  },
+  sendCaps: () => {
+    const g = state.group;
+    const peers = g ? [...g.peers.values()].filter((p) => p.pc) : [];
+    return {
+      config: { audioBps: SEND_CAPS.audioBps, maxFramerate: SEND_CAPS.maxFramerate, videoBps: { ...SEND_CAPS.videoBps } },
+      oneToOne: !g && state.pc ? readSendCaps(state.pc) : null,
+      group: peers.map((p) => ({ nr: p.nr, senders: readSendCaps(p.pc) })),
+    };
+  },
 };

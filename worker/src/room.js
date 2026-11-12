@@ -40,6 +40,19 @@ export class HannafonRoom {
       )
     `);
 
+    // V1.08: missed calls per callee (only numeric face ids + timestamps).
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS missed_calls (
+        to_nr INTEGER NOT NULL,
+        from_nr INTEGER NOT NULL,
+        count INTEGER NOT NULL DEFAULT 1,
+        first_ts INTEGER NOT NULL,
+        last_ts INTEGER NOT NULL,
+        seen INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (to_nr, from_nr)
+      )
+    `);
+
     for (const ws of this.ctx.getWebSockets()) {
       const att = ws.deserializeAttachment() || {};
       this.add(ws, Number(att.personNr) || 0, att.deviceId || "");
@@ -155,11 +168,29 @@ export class HannafonRoom {
         ws.serializeAttachment({ personNr: from, deviceId: String(data.deviceId) });
       }
       this.replayPending(ws, from, String(data.deviceId || att.deviceId || ""));
+      this.sendMissed(from, ws);
       return;
     }
 
     if (data.type === "sync") {
       this.replayPending(ws, from, fromDevice);
+      this.sendMissed(from, ws);
+      return;
+    }
+
+    // V1.08: the callee opened the list (badge off on all her devices).
+    if (data.type === "missed-seen") {
+      this.ctx.storage.sql.exec(`UPDATE missed_calls SET seen = 1 WHERE to_nr = ?`, from);
+      this.sendMissed(from);
+      return;
+    }
+
+    // V1.08: drop one entry (or all with nr 0) without calling back.
+    if (data.type === "missed-clear") {
+      const nr = Number(data.nr) || 0;
+      if (nr) this.ctx.storage.sql.exec(`DELETE FROM missed_calls WHERE to_nr = ? AND from_nr = ?`, from, nr);
+      else this.ctx.storage.sql.exec(`DELETE FROM missed_calls WHERE to_nr = ?`, from);
+      this.sendMissed(from);
       return;
     }
 
@@ -185,6 +216,11 @@ export class HannafonRoom {
       const to = Number(data.to);
       if (!to) return;
       this.clearPending(to, from);
+      // V1.08: they talked. The answerer's missed entry for the caller goes
+      // (accepted call), and so does the caller's entry for the answerer
+      // (successful callback).
+      this.clearMissed(from, to);
+      this.clearMissed(to, from);
       if (data.toDevice) this.forwardToDevice(to, data.toDevice, payload);
       else this.forwardToPerson(to, payload);
       // First acceptor wins: tell the person's other devices to stop ringing.
@@ -204,7 +240,8 @@ export class HannafonRoom {
     if (data.type === "hangup") {
       const to = Number(data.to);
       if (!to) return;
-      this.clearPending(from, to);
+      // V1.08: caller gave up while it was still ringing -> missed.
+      this.endPending(from, to);
       this.forwardToPerson(to, payload);
       return;
     }
@@ -213,9 +250,46 @@ export class HannafonRoom {
       // Local decline stays on this device — other devices keep ringing — but
       // this device must not get the offer replayed again.
       const caller = Number(data.to);
-      if (caller && fromDevice) this.declinePending(caller, from, fromDevice);
+      if (caller && fromDevice) {
+        this.declinePending(caller, from, fromDevice);
+        // V1.09: once every connected device of this person declined, tell the
+        // caller (a group call drops that tile; 1:1 ignores it and keeps
+        // waiting as before). Nothing is cleared here: the caller's hangup
+        // ends the ring, and a declined ring never counts as missed.
+        if (this.allDeclined(caller, from)) {
+          this.forwardToPerson(caller, { type: "declined", from, callId: data.callId || null });
+        }
+      }
       return;
     }
+
+    // V1.09 group calls (mesh): pure relays between participants. No pending
+    // rows, no push, no missed calls — those stay with the host's "call".
+    if (HannafonRoom.GROUP_RELAY.has(data.type)) {
+      const to = Number(data.to);
+      if (!to || to === from) return;
+      if (data.toDevice) this.forwardToDevice(to, data.toDevice, payload);
+      else this.forwardToPerson(to, payload);
+      return;
+    }
+  }
+
+  static GROUP_RELAY = new Set(["peer-join", "peer-offer", "peer-answer", "peer-ice", "peer-leave", "group-state"]);
+
+  // Every currently connected device of `toNr` declined the ring from `fromNr`.
+  allDeclined(fromNr, toNr) {
+    const row = this.getPending(fromNr, toNr);
+    if (!row) return false;
+    let declined = [];
+    try { declined = JSON.parse(row.declined) || []; } catch { declined = []; }
+    if (!declined.length) return false;
+    const set = this.byPerson.get(toNr);
+    if (!set) return true;
+    for (const sock of set) {
+      const id = this.att(sock).deviceId || "";
+      if (id && !declined.includes(id)) return false;
+    }
+    return true;
   }
 
   async webSocketClose(ws) {
@@ -233,8 +307,7 @@ export class HannafonRoom {
   static PENDING_TTL_MS = 300000; // caller must also still be connected
 
   getPending(fromNr, toNr) {
-    const cutoff = Date.now() - HannafonRoom.PENDING_TTL_MS;
-    this.ctx.storage.sql.exec(`DELETE FROM pending_calls WHERE created < ?`, cutoff);
+    this.sweepExpired();
     for (const row of this.ctx.storage.sql.exec(
       `SELECT * FROM pending_calls WHERE from_nr = ? AND to_nr = ?`,
       fromNr,
@@ -255,6 +328,9 @@ export class HannafonRoom {
       JSON.stringify(clean),
       Date.now()
     );
+    // V1.08: wake up when the ring expires, so an unanswered call becomes
+    // "missed" even if nobody touches the room again.
+    Promise.resolve(this.ctx.storage.setAlarm(Date.now() + HannafonRoom.PENDING_TTL_MS + 2000)).catch(() => {});
   }
 
   clearPending(fromNr, toNr) {
@@ -298,13 +374,90 @@ export class HannafonRoom {
     if (!nr || !dev) return;
     const others = [...(this.byPerson.get(nr) || [])].some((s) => s !== ws && (this.att(s).deviceId || "") === dev);
     if (others) return;
-    this.ctx.storage.sql.exec(`DELETE FROM pending_calls WHERE from_nr = ? AND from_device = ?`, nr, dev);
+    const ended = [];
+    for (const row of this.ctx.storage.sql.exec(
+      `SELECT from_nr, to_nr FROM pending_calls WHERE from_nr = ? AND from_device = ?`, nr, dev
+    )) ended.push([row.from_nr, row.to_nr]);
+    for (const [f, t] of ended) this.endPending(f, t);
+  }
+
+  // ---- V1.08 missed calls ------------------------------------------------
+
+  static MISSED_KEEP_MS = 14 * 24 * 3600 * 1000;
+
+  async alarm() {
+    this.sweepExpired();
+  }
+
+  // Expired ringing offers are missed calls (unless the callee declined).
+  sweepExpired() {
+    const cutoff = Date.now() - HannafonRoom.PENDING_TTL_MS;
+    const ended = [];
+    for (const row of this.ctx.storage.sql.exec(
+      `SELECT from_nr, to_nr FROM pending_calls WHERE created < ?`, cutoff
+    )) ended.push([row.from_nr, row.to_nr]);
+    for (const [f, t] of ended) this.endPending(f, t);
+  }
+
+  // A ringing offer ends without an answer: record a missed call for the
+  // callee, unless one of her devices declined it (then she noticed).
+  endPending(fromNr, toNr) {
+    let row = null;
+    for (const r of this.ctx.storage.sql.exec(
+      `SELECT declined, created FROM pending_calls WHERE from_nr = ? AND to_nr = ?`, fromNr, toNr
+    )) row = r;
+    if (!row) return false;
+    this.clearPending(fromNr, toNr);
+    let declined = [];
+    try { declined = JSON.parse(row.declined) || []; } catch { declined = []; }
+    if (declined.length) return false;
+    this.recordMissed(fromNr, toNr, Number(row.created) || Date.now());
+    return true;
+  }
+
+  recordMissed(fromNr, toNr, ts = Date.now()) {
+    if (!fromNr || !toNr || fromNr === toNr) return;
+    this.ctx.storage.sql.exec(
+      `INSERT INTO missed_calls (to_nr, from_nr, count, first_ts, last_ts, seen) VALUES (?, ?, 1, ?, ?, 0)
+       ON CONFLICT(to_nr, from_nr) DO UPDATE SET count = count + 1, last_ts = excluded.last_ts, seen = 0`,
+      toNr, fromNr, ts, ts
+    );
+    this.sendMissed(toNr);
+  }
+
+  clearMissed(toNr, fromNr) {
+    let had = false;
+    for (const _ of this.ctx.storage.sql.exec(
+      `SELECT 1 FROM missed_calls WHERE to_nr = ? AND from_nr = ?`, toNr, fromNr
+    )) had = true;
+    if (!had) return;
+    this.ctx.storage.sql.exec(`DELETE FROM missed_calls WHERE to_nr = ? AND from_nr = ?`, toNr, fromNr);
+    this.sendMissed(toNr);
+  }
+
+  missedFor(toNr) {
+    this.ctx.storage.sql.exec(`DELETE FROM missed_calls WHERE last_ts < ?`, Date.now() - HannafonRoom.MISSED_KEEP_MS);
+    const items = [];
+    for (const r of this.ctx.storage.sql.exec(
+      `SELECT from_nr, count, last_ts, seen FROM missed_calls WHERE to_nr = ? ORDER BY last_ts DESC`, toNr
+    )) items.push({ from: r.from_nr, count: r.count, last: r.last_ts, seen: !!r.seen });
+    return items;
+  }
+
+  // To one socket (on hello/sync) or to all of the person's devices.
+  sendMissed(toNr, ws = null) {
+    if (!toNr) return;
+    const msg = { type: "missed", items: this.missedFor(toNr), now: Date.now() };
+    if (ws) {
+      try { ws.send(JSON.stringify(msg)); } catch { /* ignore */ }
+    } else {
+      this.forwardToPerson(toNr, msg);
+    }
   }
 
   replayPending(ws, personNr, deviceId, { onlyFrom = 0, force = false } = {}) {
     if (!personNr) return 0;
-    const cutoff = Date.now() - HannafonRoom.PENDING_TTL_MS;
-    this.ctx.storage.sql.exec(`DELETE FROM pending_calls WHERE created < ?`, cutoff);
+    this.sweepExpired();
     let n = 0;
     for (const row of this.ctx.storage.sql.exec(`SELECT * FROM pending_calls WHERE to_nr = ?`, personNr)) {
       if (onlyFrom && row.from_nr !== onlyFrom) continue;

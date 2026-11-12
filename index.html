@@ -77,16 +77,37 @@
       <div id="zoom-card" class="zoom-card hidden" hidden>
         <p id="zoom-name" class="zoom-name"></p>
         <button type="button" id="btn-confirm" class="pill pill-amber hidden" hidden>Das bin ich</button>
-        <button type="button" id="btn-call" class="pill pill-green hidden" hidden>
-          <span>Anrufen</span>
-          <svg class="icon-phone" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
-        </button>
+        <div id="zoom-actions" class="zoom-actions">
+          <button type="button" id="btn-call" class="pill pill-green hidden" hidden>
+            <span>Anrufen</span>
+            <svg class="icon-phone" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
+          </button>
+          <!-- V1.09: group call: start select mode with this person already chosen. -->
+          <button type="button" id="btn-add-more" class="pill pill-cream pill-add-more hidden" hidden>
+            <svg class="icon-plus" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span>Noch jemanden dazu</span>
+          </button>
+        </div>
         <p id="zoom-soon" class="soon hidden" hidden>Bald verfügbar</p>
       </div>
+      <!-- V1.09: group select mode (bottom centre): one green pill, names joined. -->
+      <div id="select-bar" class="select-bar hidden" hidden>
+        <button type="button" id="btn-group-call" class="pill pill-green pill-group-call">
+          <span id="btn-group-call-label">Anrufen</span>
+          <svg class="icon-phone" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
+        </button>
+      </div>
+      <div id="select-hint" class="select-hint hidden" hidden role="status"></div>
       <button type="button" id="btn-addressbook" class="pill pill-cream corner-pill corner-pill-right hidden" hidden>
         <!-- Heroicons v2 book-open (24/solid), MIT -->
         <svg class="icon-book" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.25 4.533A9.707 9.707 0 0 0 6 3a9.735 9.735 0 0 0-3.25.555.75.75 0 0 0-.5.707v14.25a.75.75 0 0 0 1 .707A8.237 8.237 0 0 1 6 18.75c1.995 0 3.823.707 5.25 1.886V4.533ZM12.75 20.636A8.214 8.214 0 0 1 18 18.75c.966 0 1.89.166 2.75.47a.75.75 0 0 0 1-.708V4.262a.75.75 0 0 0-.5-.707A9.735 9.735 0 0 0 18 3a9.707 9.707 0 0 0-5.25 1.533v16.103Z"/></svg>
         <span>Adressbuch</span>
+      </button>
+      <!-- V1.08: Hanna only, bottom left: missed calls (orange icon + count badge). -->
+      <button type="button" id="btn-missed" class="pill pill-cream corner-pill corner-pill-left hidden" hidden aria-label="Verpasste Anrufe">
+        <svg class="icon-missed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" transform="translate(-0.4 3.6) scale(0.82)" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z"/><path d="M20.6 3.2 L13.8 10 M13.8 10 h5.1 M13.8 10 v-5.1" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Verpasste Anrufe</span>
+        <span id="missed-badge" class="missed-badge hidden" hidden aria-hidden="true"></span>
       </button>
       <button type="button" id="btn-back-photo" class="pill pill-cream corner-pill corner-pill-right hidden" hidden aria-label="Zum Foto">
         <!-- Drei angedeutete Köpfe (eigenes Icon, siehe icons/family-heads.svg) -->
@@ -100,6 +121,7 @@
         <h1 class="ab-title">Adressbuch</h1>
       </header>
       <ul id="ab-list" class="ab-list"></ul>
+      <p id="ab-empty" class="ab-empty hidden" hidden>Keine verpassten Anrufe</p>
       <button type="button" id="btn-ab-close" class="pill pill-cream corner-pill corner-pill-right ab-close">
         <svg class="icon-heads" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 24" fill="currentColor" aria-hidden="true"><g opacity="0.8"><circle cx="5.4" cy="8.4" r="2.9"/><path d="M0.8 20.2v-0.9a4.6 5.6 0 0 1 9.2 0v0.9Z"/><circle cx="24.6" cy="8.4" r="2.9"/><path d="M20 20.2v-0.9a4.6 5.6 0 0 1 9.2 0v0.9Z"/></g><g class="heads-front" stroke="#F6EFE3" stroke-width="1.6" stroke-linejoin="round" paint-order="stroke"><circle cx="15" cy="7.4" r="3.3"/><path d="M9.6 21v-1a5.4 7 0 0 1 10.8 0v1Z"/></g></svg>
         <span>Zum Foto</span>
@@ -107,7 +129,10 @@
       <template id="ab-row-tpl">
         <li class="ab-row">
           <span class="ab-avatar" aria-hidden="true"><span class="ab-letter"></span></span>
-          <span class="ab-name"></span>
+          <span class="ab-text">
+            <span class="ab-name"></span>
+            <span class="ab-meta hidden" hidden></span>
+          </span>
           <button type="button" class="pill pill-green ab-call">
             <span>Anrufen</span>
             <svg class="icon-phone" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.25.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z" clip-rule="evenodd"/></svg>
@@ -144,7 +169,12 @@
 
     <section id="screen-incoming" class="screen hidden" hidden>
       <div class="panel incoming-panel">
+        <div id="incoming-host-wrap" class="host-portrait app-icon-tile incoming-host-portrait hidden" hidden>
+          <img id="incoming-host-face" alt="" src="./icons/icon-512.png">
+        </div>
         <p id="incoming-title" class="incoming-title"></p>
+        <!-- V1.09: group call: who else is invited ("mit Maria und Daniel"). -->
+        <p id="incoming-sub" class="incoming-sub hidden" hidden></p>
         <p id="ring-hint" class="ring-hint hidden" hidden>Tippen zum Annehmen</p>
         <div class="incoming-actions">
           <button type="button" id="btn-decline" class="pill pill-red">
@@ -161,6 +191,8 @@
 
     <section id="screen-call" class="screen hidden" hidden>
       <video id="remote-video" autoplay playsinline></video>
+      <!-- V1.09: group call tiles (one per person, contain, black letterbox). -->
+      <div id="call-grid" class="call-grid hidden" hidden></div>
       <video id="local-video" autoplay playsinline muted></video>
       <p id="call-status" class="call-status"></p>
       <button type="button" id="btn-hangup" class="pill pill-red pill-hangup">
@@ -177,7 +209,7 @@
     <div id="taken-toast" class="taken-toast hidden" hidden>Anderswo angenommen</div>
 
     <div id="reset-sheet" class="reset-sheet hidden" hidden>
-      <p class="version">Hannafon V1.07</p>
+      <p class="version">Hannafon V1.09</p>
       <button type="button" id="btn-reset" class="pill pill-ink">Alles zurücksetzen</button>
       <button type="button" id="btn-reset-cancel" class="btn-text">Abbrechen</button>
     </div>

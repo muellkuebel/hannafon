@@ -2,7 +2,11 @@
 // one iOS grant covers both camera and microphone.
 const MEDIA_CONSTRAINTS = {
   audio: true,
-  video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+  // V1.08: 4:3, the native shape of iPhone/iPad front cameras. The old 16:9
+  // request (1280x720) made iOS crop the sensor top/bottom (tighter, "zoomed"
+  // picture). iOS rotates the frame itself (960x1280 when held upright).
+  // resizeMode "none": no crop-and-scale by the browser where supported.
+  video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 960 }, resizeMode: { ideal: "none" } },
 };
 
 // iOS/iPadOS shows its own system dialog for camera/microphone. A web app can
@@ -155,4 +159,63 @@ export function closePeer(pc) {
   } catch {
     /* ignore */
   }
+}
+
+// ---------------------------------------------------------------------------
+// V1.09: moderate send caps ("ein bisschen runter", Hanna's iPad SIM has
+// 10 GB/month). Capture stays 4:3 1280x960 ideal; the encoder scales down by
+// itself when the bitrate is capped. Every device caps what it SENDS, so one
+// call direction never exceeds these numbers. No user-facing setting.
+//   1:1          video 1000 kbps, 24 fps, audio 48 kbps  -> ~1.0 GB/h on each device
+//   2 remotes    video  600 kbps per stream (2 streams out, 2 in)  -> ~1.2 GB/h
+//   3 remotes    video  450 kbps per stream (3 streams out, 3 in)  -> ~1.4 GB/h
+export const SEND_CAPS = Object.freeze({
+  audioBps: 48000,
+  maxFramerate: 24,
+  videoBps: Object.freeze({ 1: 1000000, 2: 600000, 3: 450000 }),
+});
+
+export function videoCapFor(remoteCount) {
+  const n = Math.max(1, Math.min(3, Number(remoteCount) || 1));
+  return SEND_CAPS.videoBps[n];
+}
+
+// Safe to call repeatedly (after setLocalDescription, on "connected", and when
+// the number of people in a group call changes). Errors are ignored: some
+// WebKit versions only accept parameters after negotiation; the "connected"
+// retry covers that.
+export async function applySendCaps(pc, remoteCount = 1) {
+  if (!pc || typeof pc.getSenders !== "function") return null;
+  const videoBps = videoCapFor(remoteCount);
+  const applied = [];
+  for (const sender of pc.getSenders()) {
+    const kind = sender.track?.kind;
+    if (!kind || typeof sender.getParameters !== "function") continue;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      for (const enc of params.encodings) {
+        if (kind === "video") {
+          enc.maxBitrate = videoBps;
+          enc.maxFramerate = SEND_CAPS.maxFramerate;
+        } else if (kind === "audio") {
+          enc.maxBitrate = SEND_CAPS.audioBps;
+        }
+      }
+      await sender.setParameters(params);
+      applied.push(kind);
+    } catch {
+      /* retried on "connected" */
+    }
+  }
+  pc._sendCap = { remoteCount: Math.max(1, Math.min(3, Number(remoteCount) || 1)), videoBps, applied };
+  return pc._sendCap;
+}
+
+export function readSendCaps(pc) {
+  if (!pc || typeof pc.getSenders !== "function") return [];
+  return pc.getSenders().filter((s) => s.track).map((s) => {
+    const e = (s.getParameters().encodings || [])[0] || {};
+    return { kind: s.track.kind, maxBitrate: e.maxBitrate ?? null, maxFramerate: e.maxFramerate ?? null };
+  });
 }
