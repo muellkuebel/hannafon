@@ -163,7 +163,14 @@
         <p id="push-status" class="push-status"></p>
         <button type="button" id="btn-notify" class="btn-text hidden" hidden>Mitteilungen erlauben</button>
         <button type="button" id="btn-push-test" class="btn-text hidden" hidden>Test-Mitteilung senden</button>
-        <button type="button" id="btn-disconnect" class="btn-disconnect hidden" hidden>Dieses Gerät trennen</button>
+        <!-- V1.11: guests only: small links at the bottom (settings + disconnect). -->
+        <div class="standby-links">
+          <button type="button" id="btn-ring-settings" class="btn-disconnect btn-settings hidden" hidden>
+            <svg class="icon-gear" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.9 4.6 1.7 1.7 0 0 0 9.97 3V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09c-.66 0-1.25.4-1.51 1z"/></svg>
+            <span>Einstellungen</span>
+          </button>
+          <button type="button" id="btn-disconnect" class="btn-disconnect hidden" hidden>Dieses Gerät trennen</button>
+        </div>
       </div>
     </section>
 
@@ -206,10 +213,21 @@
       <button type="button" id="btn-disconnect-confirm" class="pill pill-red">Trennen</button>
       <button type="button" id="btn-disconnect-cancel" class="btn-text">Abbrechen</button>
     </div>
+    <!-- V1.11: per-device setting (guests only): keep the quiet background
+         sound running so the Hannafon ringtone can ring, default off. -->
+    <div id="ring-sheet" class="reset-sheet ring-sheet hidden" hidden role="dialog" aria-labelledby="ring-sheet-title">
+      <h2 id="ring-sheet-title" class="ring-sheet-title">Klingelton bei offener App</h2>
+      <button type="button" id="btn-keepalive-toggle" class="ring-toggle" role="switch" aria-checked="false" aria-labelledby="ring-sheet-title">
+        <span id="ring-toggle-state" class="ring-toggle-state">Aus</span>
+        <span class="ring-switch" aria-hidden="true"><span class="ring-knob"></span></span>
+      </button>
+      <p id="ring-sheet-copy" class="ring-sheet-copy"></p>
+      <button type="button" id="btn-ring-sheet-close" class="pill pill-green ring-sheet-done">Fertig</button>
+    </div>
     <div id="taken-toast" class="taken-toast hidden" hidden>Anderswo angenommen</div>
 
     <div id="reset-sheet" class="reset-sheet hidden" hidden>
-      <p class="version">Hannafon V1.10</p>
+      <p class="version">Hannafon V1.11</p>
       <button type="button" id="btn-reset" class="pill pill-ink">Alles zurücksetzen</button>
       <button type="button" id="btn-reset-cancel" class="btn-text">Abbrechen</button>
     </div>

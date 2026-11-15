@@ -29,6 +29,10 @@ let ringEl = null;
 let mediaBlessed = false; // keep-alive + ringtone elements played once inside a gesture
 let callActive = false;
 let ringFilePlaying = false;
+// V1.11: may the near-silent keep-alive loop run on this device? Hanna (host,
+// face 10) always; everyone else only if they switched it on (default off).
+// The app sets this once the identity is known; until then it stays off.
+let keepAllowed = false;
 const log = [];
 
 function note(ev) {
@@ -72,7 +76,7 @@ async function tryPlay(el) {
 // ignores el.volume, so the keep-alive file itself is practically silent.
 async function blessMedia() {
   ensureMediaEls();
-  if (!callActive && keepEl.paused) {
+  if (keepAllowed && !callActive && keepEl.paused) {
     keepEl.muted = false;
     if (await tryPlay(keepEl)) note("keepalive-play");
   }
@@ -95,13 +99,39 @@ function keepAliveRunning() {
   return !!(keepEl && !keepEl.paused && !keepEl.ended);
 }
 
+// V1.11: switch the keep-alive loop on/off for this device. Off stops it at
+// once. On starts it right away when called inside a tap (the settings toggle,
+// "Das bin ich"); otherwise the next tap starts it.
+export async function setKeepAliveAllowed(on) {
+  keepAllowed = !!on;
+  ensureMediaEls();
+  if (!keepAllowed) {
+    if (!keepEl.paused) {
+      keepEl.pause();
+      note("keepalive-off");
+    }
+    return false;
+  }
+  if (!callActive && keepEl.paused) {
+    keepEl.muted = false;
+    const ok = await tryPlay(keepEl);
+    note(ok ? "keepalive-on" : "keepalive-on-blocked");
+    if (ok) mediaBlessed = true;
+  }
+  return keepAliveRunning();
+}
+
+export function isKeepAliveAllowed() {
+  return keepAllowed;
+}
+
 export function setCallActive(on) {
   callActive = !!on;
   ensureMediaEls();
   if (callActive) {
     if (!keepEl.paused) keepEl.pause();
     note("keepalive-pause-call");
-  } else if (mediaBlessed && keepEl.paused) {
+  } else if (keepAllowed && mediaBlessed && keepEl.paused) {
     // Outside a gesture this may be refused; the next tap restarts it.
     tryPlay(keepEl).then((ok) => note(ok ? "keepalive-resume" : "keepalive-resume-blocked"));
   }
@@ -233,6 +263,7 @@ export function audioDebug() {
     ringing,
     mediaBlessed,
     callActive,
+    keepAllowed,
     log: log.slice(),
   };
 }
@@ -255,7 +286,7 @@ export function bindAudioUnlock() {
   const revive = () => {
     if (document.visibilityState !== "visible") return;
     ensureMediaEls();
-    if (mediaBlessed && !callActive && keepEl.paused) {
+    if (keepAllowed && mediaBlessed && !callActive && keepEl.paused) {
       tryPlay(keepEl).then((ok) => note(ok ? "keepalive-revive" : "keepalive-revive-blocked"));
     }
     unlockAudio();

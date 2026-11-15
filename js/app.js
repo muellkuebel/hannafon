@@ -46,12 +46,17 @@ import {
   setCallActive,
   isRingAudible,
   audioDebug,
+  setKeepAliveAllowed,
+  isKeepAliveAllowed,
 } from "./audio.js";
 
 const $ = (id) => document.getElementById(id);
 
 // V1.08: local cache of Hanna's missed calls (face numbers + timestamps only).
 const STORAGE_MISSED = "hannafon-missed-v1";
+// V1.11: per-device choice of a guest: "1" = keep the quiet background sound
+// running (custom ringtone can ring), anything else = off (default).
+const STORAGE_KEEPALIVE = "hannafon-ring-keepalive";
 
 const ui = {
   code: $("screen-code"),
@@ -126,6 +131,13 @@ const ui = {
   selectHint: $("select-hint"),
   incomingSub: $("incoming-sub"),
   callGrid: $("call-grid"),
+  // V1.11 guest setting
+  btnRingSettings: $("btn-ring-settings"),
+  ringSheet: $("ring-sheet"),
+  btnKeepToggle: $("btn-keepalive-toggle"),
+  ringToggleState: $("ring-toggle-state"),
+  ringSheetCopy: $("ring-sheet-copy"),
+  btnRingSheetClose: $("btn-ring-sheet-close"),
 };
 
 const state = {
@@ -181,6 +193,7 @@ function showScreen(name) {
   setCallActive(name === "call");
   if (!showPhoto) app.classList.remove("is-zoomed");
   if (name !== "photo") closeAddressbook();
+  if (name !== "standby") show(ui.ringSheet, false);
   updateCornerButtons();
   state.screen = name;
   requestEdgeColors();
@@ -203,6 +216,9 @@ function updateCornerButtons() {
   // three-heads icon) and restores the photo home; elsewhere "Zum Foto".
   const cancelMode = selecting && !zoomed;
   ui.btnBackPhoto.classList.toggle("is-cancel", cancelMode);
+  // V1.11: on Hanna's zoom card "Zum Foto" sits bottom-left, so Anrufen can be
+  // exactly centred with "Noch jemanden dazu" right beside it.
+  ui.btnBackPhoto.classList.toggle("at-left", zoomed && !cancelMode && state.mode === "host");
   const backLabel = ui.btnBackPhoto.querySelector(".back-label");
   const wantLabel = cancelMode ? "Abbrechen" : "Zum Foto";
   if (backLabel && backLabel.textContent !== wantLabel) backLabel.textContent = wantLabel;
@@ -721,14 +737,37 @@ function clearMask() {
   ui.sharp.classList.remove("is-masked");
 }
 
-// V1.06: eight mirrored copies of the blurred photo around the stack. Mirroring
-// makes every seam continuous, so a zoomed edge face can sit in the centre and
-// the photo simply seems to go on (blurred) beyond its real edge.
+// V1.06 / V1.11: continuation around the photo (visible only while zoomed), so
+// a zoomed edge face can sit in the exact centre. V1.06 mirrored the blurred
+// photo on all sides, which put mirrored family members and seams next to the
+// people at the left/right edges. V1.11: left and right are a *designed garden
+// continuation*, 1.5 photo widths each, synthesised at runtime from the
+// people-free outermost bands of the photo (hedge/trees, lawn, sand path,
+// lawn): band colours continue outward with shuffled foliage texture, soft
+// light variation and a light blur. Top/bottom (only grass/trees ever show
+// there) stay mirrored. Nothing is stored or uploaded: built in memory from
+// the already loaded, code-protected photo.
+const EXT_SIDE = 1.5; // width of each side extension, in photo widths
+// Outer bands of the photo that contain no people (fractions of the width).
+const EXT_SAMPLE = { left: [0, 0.035], right: [0.945, 1] };
 const EXTEND_TILES = [
   [-1, -1], [0, -1], [1, -1],
   [-1, 0], [1, 0],
   [-1, 1], [0, 1], [1, 1],
 ];
+const extendState = { mode: "mirror", left: null, right: null, stats: null };
+
+function placeExtendTile(img, cx, cy, scenery) {
+  // 1px overlap towards the photo hides any hairline seam.
+  const wide = scenery && cx !== 0;
+  const w = wide ? EXT_SIDE * 100 : 100;
+  img.style.width = `${w}%`;
+  img.style.left = cx < 0 ? `calc(-${w}% + 1px)` : cx > 0 ? "calc(100% - 1px)" : "0";
+  img.style.top = `calc(${cy * 100}% - ${cy}px)`;
+  // Scenery sides are already oriented; only corners flip vertically.
+  img.style.transform = wide ? `scale(1, ${cy ? -1 : 1})` : `scale(${cx ? -1 : 1}, ${cy ? -1 : 1})`;
+}
+
 function paintPhotoExtend(src) {
   const box = document.getElementById("photo-extend");
   if (!box || !src) return;
@@ -737,14 +776,223 @@ function paintPhotoExtend(src) {
       const img = document.createElement("img");
       img.alt = "";
       img.draggable = false;
-      // 1px overlap towards the photo hides any hairline seam.
-      img.style.left = `calc(${cx * 100}% - ${cx}px)`;
-      img.style.top = `calc(${cy * 100}% - ${cy}px)`;
-      img.style.transform = `scale(${cx ? -1 : 1}, ${cy ? -1 : 1})`;
+      img.dataset.cx = String(cx);
+      img.dataset.cy = String(cy);
       box.appendChild(img);
     }
   }
-  for (const img of box.children) img.src = src;
+  const scenery = extendState.mode === "scenery";
+  for (const img of box.children) {
+    const cx = Number(img.dataset.cx);
+    const cy = Number(img.dataset.cy);
+    placeExtendTile(img, cx, cy, scenery);
+    img.src = scenery && cx < 0 ? extendState.left : scenery && cx > 0 ? extendState.right : src;
+  }
+}
+
+function sceneryRand(seed) {
+  let t = seed >>> 0;
+  return () => {
+    t = (t + 0x6d2b79f5) >>> 0;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Smooth value noise in [-1, 1] on a coarse grid (soft light / shade patches).
+function sceneryNoise(w, h, cell, rand) {
+  const gw = Math.ceil(w / cell) + 2;
+  const gh = Math.ceil(h / cell) + 2;
+  const g = new Float32Array(gw * gh).map(() => rand() * 2 - 1);
+  const out = new Float32Array(w * h);
+  const sm = (t) => t * t * (3 - 2 * t);
+  for (let y = 0; y < h; y++) {
+    const gy = y / cell;
+    const y0 = Math.floor(gy);
+    const fy = sm(gy - y0);
+    for (let x = 0; x < w; x++) {
+      const gx = x / cell;
+      const x0 = Math.floor(gx);
+      const fx = sm(gx - x0);
+      const a = g[y0 * gw + x0], b = g[y0 * gw + x0 + 1];
+      const c = g[(y0 + 1) * gw + x0], d = g[(y0 + 1) * gw + x0 + 1];
+      out[y * w + x] = (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+    }
+  }
+  return out;
+}
+
+function boxBlurRGB(buf, w, h, r) {
+  const tmp = new Float32Array(buf.length);
+  const pass = (src, dst, horiz) => {
+    const n = horiz ? w : h;
+    const m = horiz ? h : w;
+    for (let j = 0; j < m; j++) {
+      for (let ch = 0; ch < 3; ch++) {
+        let acc = 0;
+        const idx = (i) => {
+          const k = Math.max(0, Math.min(n - 1, i));
+          return ((horiz ? j * w + k : k * w + j) * 3) + ch;
+        };
+        for (let i = -r; i <= r; i++) acc += src[idx(i)];
+        for (let i = 0; i < n; i++) {
+          dst[idx(i)] = acc / (2 * r + 1);
+          acc += src[idx(i + r + 1)] - src[idx(i - r)];
+        }
+      }
+    }
+  };
+  pass(buf, tmp, true);
+  pass(tmp, buf, false);
+}
+
+// Build one side (outward distance e = 0 at the photo edge).
+function buildScenerySide(img, side) {
+  const H = 360;
+  const W = Math.round((H * img.naturalWidth) / img.naturalHeight);
+  const E = Math.round(W * EXT_SIDE);
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, W, H);
+  const [fa, fb] = EXT_SAMPLE[side];
+  const x0 = Math.floor(fa * W);
+  const x1 = Math.max(x0 + 6, Math.ceil(fb * W));
+  const sw = x1 - x0;
+  const strip = ctx.getImageData(x0, 0, sw, H).data;
+  // d = 0 is the column at the photo edge, growing inward (mirror order).
+  const at = (d, y, ch) => {
+    const dd = Math.max(0, Math.min(sw - 1, d));
+    const yy = Math.max(0, Math.min(H - 1, y));
+    const col = side === "left" ? dd : sw - 1 - dd;
+    return strip[(yy * sw + col) * 4 + ch];
+  };
+  // Row means (vertically smoothed): the "bands" of the garden.
+  const mean = new Float32Array(H * 3);
+  for (let y = 0; y < H; y++) {
+    for (let ch = 0; ch < 3; ch++) {
+      let acc = 0, n = 0;
+      for (let yy = y - 4; yy <= y + 4; yy++) for (let d = 0; d < sw; d++) { acc += at(d, yy, ch); n++; }
+      mean[y * 3 + ch] = acc / n;
+    }
+  }
+  // Safety net: drop any column whose middle (where people stand) is tinted
+  // away from the band's typical garden colour (a blurred arm, a dress).
+  const tint = [];
+  for (let d = 0; d < sw; d++) {
+    let acc = 0, n = 0;
+    for (let y = Math.round(H * 0.25); y < Math.round(H * 0.72); y++) { acc += at(d, y, 0) - at(d, y, 1); n++; }
+    tint.push(acc / n);
+  }
+  const sorted = [...tint].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  let good = tint.map((t, d) => (Math.abs(t - med) <= 4 ? d : -1)).filter((d) => d >= 0);
+  if (good.length < 4) good = tint.map((_, d) => d);
+  const rand = sceneryRand(side === "left" ? 0x51a7e : 0x7e11a);
+  const light = sceneryNoise(E, H, 34, rand);
+  const fine = sceneryNoise(E, H, 9, rand);
+  const buf = new Float32Array(E * H * 3);
+  // Column plan: copy short runs of strip columns (random start, direction and
+  // a little vertical jitter) so foliage texture continues without repeating.
+  const plan = [];
+  for (let e = 0; e < E; ) {
+    const len = 6 + Math.floor(rand() * 14);
+    const dir = rand() < 0.5 ? 1 : -1;
+    const gn = good.length;
+    const start = Math.floor(rand() * gn);
+    const jit = Math.round((rand() - 0.5) * 6);
+    for (let k = 0; k < len && e < E; k++, e++) {
+      let i = start + dir * k;
+      i = ((i % (2 * gn)) + 2 * gn) % (2 * gn);
+      if (i >= gn) i = 2 * gn - 1 - i;
+      plan.push([good[i], jit]);
+    }
+  }
+  for (let y = 0; y < H; y++) {
+    for (let e = 0; e < E; e++) {
+      const [d, jit] = plan[e];
+      // Mirror right at the seam (continuous with the photo), texture beyond.
+      const m = Math.max(0, Math.min(1, (e - sw * 0.6) / (sw * 0.8)));
+      // Far away: a bit calmer (more band colour, less texture).
+      const calm = Math.min(0.45, (e / E) * 0.6);
+      const shade = 1 + 0.07 * light[y * E + e] * m + 0.035 * fine[y * E + e] * m;
+      for (let ch = 0; ch < 3; ch++) {
+        const mirror = at(good[Math.min(e, good.length - 1)], y, ch);
+        const tex = at(d, y + jit, ch);
+        let v = mirror * (1 - m) + tex * m;
+        v = v * (1 - calm * m) + mean[y * 3 + ch] * calm * m;
+        buf[(y * E + e) * 3 + ch] = v * shade;
+      }
+    }
+  }
+  boxBlurRGB(buf, E, H, 2);
+  const out = document.createElement("canvas");
+  out.width = E;
+  out.height = H;
+  const octx = out.getContext("2d");
+  const im = octx.createImageData(E, H);
+  let sum = 0, sum2 = 0, gsum = 0;
+  for (let y = 0; y < H; y++) {
+    for (let e = 0; e < E; e++) {
+      const x = side === "left" ? E - 1 - e : e;
+      const o = (y * E + x) * 4;
+      const i = (y * E + e) * 3;
+      const r = Math.max(0, Math.min(255, buf[i]));
+      const g = Math.max(0, Math.min(255, buf[i + 1]));
+      const b = Math.max(0, Math.min(255, buf[i + 2]));
+      im.data[o] = r; im.data[o + 1] = g; im.data[o + 2] = b; im.data[o + 3] = 255;
+      const l = (r + g + b) / 3;
+      sum += l; sum2 += l * l; gsum += g - (r + b) / 2;
+    }
+  }
+  octx.putImageData(im, 0, 0);
+  const n = E * H;
+  const meanL = sum / n;
+  return {
+    canvas: out,
+    stats: { w: E, h: H, meanL, sdL: Math.sqrt(Math.max(0, sum2 / n - meanL * meanL)), green: gsum / n },
+  };
+}
+
+async function buildPhotoScenery(img, blurUrl) {
+  try {
+    if (!img?.naturalWidth) return false;
+    const urls = {};
+    const stats = {};
+    for (const side of ["left", "right"]) {
+      const { canvas, stats: st } = buildScenerySide(img, side);
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.86));
+      if (!blob) return false;
+      if (extendState[side]) URL.revokeObjectURL(extendState[side]);
+      urls[side] = URL.createObjectURL(blob);
+      stats[side] = st;
+    }
+    extendState.left = urls.left;
+    extendState.right = urls.right;
+    extendState.stats = stats;
+    extendState.mode = "scenery";
+    paintPhotoExtend(blurUrl);
+    const box = document.getElementById("photo-extend");
+    await Promise.all([...(box?.children || [])].map((i) => i.decode().catch(() => {})));
+    return true;
+  } catch (err) {
+    console.warn("[hannafon] scenery", err);
+    return false;
+  }
+}
+
+function photoExtendInfo() {
+  const box = document.getElementById("photo-extend");
+  const tiles = [...(box?.children || [])].map((i) => ({
+    cx: Number(i.dataset.cx),
+    cy: Number(i.dataset.cy),
+    scenery: !!extendState.left && (i.src === extendState.left || i.src === extendState.right),
+    ready: i.complete && i.naturalWidth > 0,
+    widthPct: parseFloat(i.style.width) || 100,
+  }));
+  return { mode: extendState.mode, side: EXT_SIDE, stats: extendState.stats, tiles };
 }
 
 async function applyZoom(person, animate = true) {
@@ -767,15 +1015,16 @@ async function applyZoom(person, animate = true) {
   const targetH = viewH * 0.62;
   const targetW = viewW * 0.88;
   const zFit = Math.min(targetW / bw, targetH / bh) * 0.92;
-  // Never zoom out below "photo covers the viewport". One mirrored tile on
-  // each side is then always enough to centre any face (see paintPhotoExtend).
+  // Never zoom out below "photo covers the viewport". Then at most half a
+  // photo width beyond the edge can ever show; the 1.5-width scenery on each
+  // side (see paintPhotoExtend) leaves plenty of designed garden around it.
   const zMin = Math.max(viewW / layout.dw, viewH / layout.dh) * 1.002;
   const z = Math.max(zFit, zMin);
   const lx = faceX;
   const ly = faceY;
   // V1.06: the chosen face always lands at the horizontal centre (and the
   // usual height above name + Anrufen), no clamping at the photo bounds:
-  // beyond the real edge the mirrored blurred extension shows.
+  // beyond the real edge the designed garden continuation shows (V1.11).
   const destX = viewW / 2;
   const destY = viewH * 0.28;
   const tx = destX - layout.ox - lx * z;
@@ -905,6 +1154,8 @@ function paintStandby() {
   }
   show(ui.installHint, !isStandalone());
   show(ui.btnDisconnect, true);
+  show(ui.btnRingSettings, true);
+  syncKeepToggle();
   refreshPushUi();
 }
 
@@ -996,6 +1247,8 @@ async function loadMedia() {
   ui.sharp.alt = "Familienfoto";
   await ui.sharp.decode().catch(() => {});
   await ui.blur.decode().catch(() => {});
+  // V1.11: garden continuation left/right instead of mirrored family members.
+  await buildPhotoScenery(ui.blur, blurUrl);
   buildEdgeSamplers();
   requestEdgeColors();
   await paintHostPortrait();
@@ -1033,6 +1286,7 @@ async function afterAuth(cfg, code) {
   await loadMedia();
   const idNr = Number(localStorage.getItem(STORAGE_IDENTITY) || 0);
   state.identity = idNr ? personByNr(idNr) : null;
+  applyKeepAlivePref();
   if (state.identity) connectSignaling();
   const incoming = incomingFromUrl();
   goHome();
@@ -1123,6 +1377,7 @@ ui.btnConfirm.addEventListener("click", () => {
   primeMediaPermission("setup");
   state.identity = state.zoomed;
   localStorage.setItem(STORAGE_IDENTITY, String(state.identity.nr));
+  applyKeepAlivePref();
   connectSignaling();
   goHome();
 });
@@ -1472,6 +1727,7 @@ async function fullReset() {
   localStorage.removeItem(STORAGE_IDENTITY);
   localStorage.removeItem(STORAGE_DEVICE);
   localStorage.removeItem(STORAGE_MISSED);
+  localStorage.removeItem(STORAGE_KEEPALIVE);
   await clearMediaCache();
   revokeMedia();
   location.reload();
@@ -2373,6 +2629,55 @@ function renderGrid() {
   grid.dataset.count = String(peers.length);
 }
 
+// ---------------------------------------------------------------------------
+// V1.11: "Klingelton bei offener App" (guests only, per device, default off).
+// Hanna (host, face 10) always keeps the quiet background sound; no setting.
+function isHostDevice() {
+  return !!(state.identity && isHostPerson(state.identity, state.config));
+}
+
+function guestKeepAliveOn() {
+  return localStorage.getItem(STORAGE_KEEPALIVE) === "1";
+}
+
+function keepAlivePref() {
+  if (!state.identity) return false;
+  if (isHostDevice()) return true;
+  return guestKeepAliveOn();
+}
+
+function applyKeepAlivePref() {
+  setKeepAliveAllowed(keepAlivePref());
+  syncKeepToggle();
+}
+
+function syncKeepToggle() {
+  if (!ui.btnKeepToggle) return;
+  const on = guestKeepAliveOn();
+  const hostName = hostPerson()?.name || "Hanna";
+  ui.btnKeepToggle.setAttribute("aria-checked", on ? "true" : "false");
+  ui.ringToggleState.textContent = on ? "An" : "Aus";
+  ui.ringSheetCopy.textContent = on
+    ? `Hannafon spielt im Hintergrund fast unhörbar weiter. So kann dein Hannafon-Klingelton klingeln, wenn ${hostName} anruft, solange die App offen ist – auch bei gesperrtem iPhone. Hannafon kann dabei auf dem Sperrbildschirm unter „Wird gespielt“ erscheinen.`
+    : `Wenn ${hostName} anruft und Hannafon nicht vorne offen ist, bekommst du nur die Mitteilung mit dem normalen iPhone-Ton. Auf dem Sperrbildschirm erscheint nichts von Hannafon.`;
+}
+
+ui.btnRingSettings?.addEventListener("click", () => {
+  if (isHostDevice()) return;
+  syncKeepToggle();
+  show(ui.ringSheet, true);
+});
+ui.btnRingSheetClose?.addEventListener("click", () => show(ui.ringSheet, false));
+ui.btnKeepToggle?.addEventListener("click", () => {
+  if (!state.identity || isHostDevice()) return;
+  const on = !guestKeepAliveOn();
+  if (on) localStorage.setItem(STORAGE_KEEPALIVE, "1");
+  else localStorage.removeItem(STORAGE_KEEPALIVE);
+  // This tap is the gesture iOS needs: starting the sound right here works.
+  setKeepAliveAllowed(on);
+  syncKeepToggle();
+});
+
 ui.btnNotify.addEventListener("click", async () => {
   // Permission + subscribe only inside this tap handler (iOS requirement).
   try {
@@ -2448,8 +2753,11 @@ async function disconnectThisDevice() {
   }
   localStorage.removeItem(STORAGE_IDENTITY);
   localStorage.removeItem(STORAGE_MISSED);
+  localStorage.removeItem(STORAGE_KEEPALIVE);
   state.missed = [];
   state.identity = null;
+  applyKeepAlivePref();
+  show(ui.ringSheet, false);
   state.mode = "setup";
   show(ui.disconnectSheet, false);
   goHome();
@@ -2617,6 +2925,7 @@ window.__hannafonTest = {
     return p ? { nr: p.nr, name: p.name } : null;
   },
   photoCoverage,
+  photoExtendInfo,
   layout: () => ({ ...state.layout, view: { ...currentView() }, nav: { ...state.nav } }),
   pinchPan(dx, dy, factor) {
     if (factor && factor !== 1) {
@@ -2684,6 +2993,9 @@ window.__hannafonTest = {
     state.signaling.reconnect();
   },
   photoScale: () => ({ ...currentView(), navUser: !!state.navUser }),
+  // V1.11 keep-alive setting
+  keepAliveAllowed: () => isKeepAliveAllowed(),
+  keepAlivePref: () => localStorage.getItem(STORAGE_KEEPALIVE),
   // V1.09 group calls + send caps
   joinNames: (names) => joinNames(names),
   selectState: () => (state.select ? { nrs: state.select.nrs.slice() } : null),

@@ -1,6 +1,6 @@
 # Hannafon
 
-Lokale PWA für Familien-Videoanrufe (V1.10). Vanilla HTML, CSS und JavaScript.
+Lokale PWA für Familien-Videoanrufe (V1.11). Vanilla HTML, CSS und JavaScript.
 
 Live-Test (GitHub Pages + Cloudflare Worker):
 https://muellkuebel.github.io/hannafon/
@@ -26,7 +26,7 @@ npm run test:e2e
 
 ## Hinweise
 
-- Service-Worker-Cache: `hannafon-v1.10`
+- Service-Worker-Cache: `hannafon-v1.11`
 - Verstecktes Zurücksetzen: die obere rechte Ecke fünf Sekunden gedrückt halten (unsichtbare Fläche, seit V1.06 ohne sichtbaren Hannafon-Schriftzug; löscht auch den Familien-Code). Bei offenem Adressbuch nicht erreichbar.
 - Empfänger können unten auf Standby „Dieses Gerät trennen“ tippen: nur dieses Gerät, der Familien-Code bleibt
 - Mehrere Geräte pro Person: jedes Gerät hat eine eigene ID, ein Anruf klingelt überall, das erste Annehmen gewinnt
@@ -49,3 +49,6 @@ npm run test:e2e
 - Gruppenanruf, Technik: Mesh ohne Server-Medien, nur STUN (kein TURN). Hanna ↔ Gast über die normalen `call`/`answer`/`ice`; nimmt jemand an, schickt Hanna allen schon Verbundenen `peer-join`, und der schon verbundene Gast bietet dem Neuen an (`peer-offer`/`peer-answer`/`peer-ice`, keine Kollision). Hanna verteilt die Teilnehmerliste (`group-state`), ein Gast verlässt mit `hangup` an Hanna + `peer-leave` an die anderen. Der Worker leitet diese Nachrichten nur weiter (keine Speicherung) und meldet `declined`, wenn alle verbundenen Geräte einer Person abgelehnt haben.
 - Datenvolumen (V1.09): jedes Gerät begrenzt, was es sendet (`RTCRtpSender.setParameters`): Einzelanruf Video 1000 kbit/s, 24 fps, Audio 48 kbit/s → etwa 1,0 GB pro Stunde auf Hannas iPad (senden + empfangen). Gruppe mit 2 anderen: 600 kbit/s pro Strom (2 raus, 2 rein) → etwa 1,2 GB/h; mit 3 anderen: 450 kbit/s pro Strom → etwa 1,4 GB/h. Aufnahme bleibt 4:3 1280×960, nie beschnitten. Keine Einstellungsseite.
 - Auswahl für Gruppenanrufe (V1.10): unten rechts steht in der Auswahl „Abbrechen“ (Creme-Pille, ohne Köpfe-Symbol) statt „Zum Foto“. Abbrechen beendet die Auswahl, löscht sie und zeigt wieder das normale Familienfoto mit Begrüßung (nicht den Zoom der ersten Person). Im Zoom, im Adressbuch und bei „Verpasste Anrufe“ bleibt es „Zum Foto“.
+- Klingelton bei offener App (V1.11, nur Empfänger, pro Gerät): Auf dem Bereitschaftsbildschirm unten „Einstellungen“ (neben „Dieses Gerät trennen“) öffnet „Klingelton bei offener App“ mit einem An/Aus-Schalter. Standard ist **aus**: dann läuft im Hintergrund kein fast unhörbarer Ton, und wenn Hanna anruft, kommt bei nicht geöffneter App nur die Mitteilung mit dem normalen iPhone-Ton. **An**: der fast unhörbare Ton läuft (startet sofort beim Antippen), der eigene Klingelton kann bei offener App klingeln, Hannafon kann auf dem Sperrbildschirm unter „Wird gespielt“ erscheinen. Gespeichert in `localStorage` (`hannafon-ring-keepalive`), gelöscht bei „Dieses Gerät trennen“ und beim Zurücksetzen. Hannas iPad (Gesicht Nr. 10) hat keinen Schalter; dort läuft der Hintergrundton wie bisher nach dem ersten Tippen immer.
+- Zoom-Karte (V1.11): „Anrufen“ steht genau in der Bildschirmmitte, „Noch jemanden dazu“ direkt rechts daneben (auf schmalen Handys direkt darunter), „Zum Foto“ unten links. In der Gruppenauswahl bleibt „Abbrechen“ unten rechts.
+- Foto-Fortsetzung (V1.11): Links und rechts neben dem Foto liegt je 1,5 Fotobreiten „Garten“ (Hecke/Bäume, Rasen, Sandweg), der beim Laden im Speicher aus den personenfreien äußersten Randstreifen des Fotos erzeugt wird (Bandfarben + Laubstruktur + leichte Unschärfe; Spalten mit Haut-/Kleidungstönung werden verworfen). Ersetzt die gespiegelten Fotokopien von V1.06, die beim Antippen der äußeren Personen gespiegelte Familienmitglieder und Kanten zeigten. Oben/unten bleibt gespiegelt (dort nur Bäume/Rasen sichtbar). Nichts davon wird gespeichert oder hochgeladen; Antippflächen und Personenpositionen auf dem echten Foto sind unverändert.
