@@ -1,7 +1,7 @@
 import { HannafonRoom } from "./room.js";
 export { HannafonRoom };
 
-const VERSION = "V1.11";
+const VERSION = "V1.12";
 
 function normalizeCode(code) {
   return String(code || "")

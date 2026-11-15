@@ -5,6 +5,14 @@ export class HannafonRoom {
     this.ctx = ctx;
     this.env = env;
     this.byPerson = new Map();
+    // V1.12: clients send "ping" every 25 s; the edge answers "pong" without
+    // waking this object. Keeps sockets past Cloudflare's ~100 s idle close and
+    // lets us tell a live socket from a stale one (see liveCount).
+    try {
+      this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    } catch {
+      /* older runtime / tests */
+    }
 
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS pushes (
@@ -87,7 +95,7 @@ export class HannafonRoom {
       if (!personNr) return new Response("person required", { status: 400 });
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]);
-      pair[1].serializeAttachment({ personNr, deviceId });
+      pair[1].serializeAttachment({ personNr, deviceId, opened: Date.now() });
       this.add(pair[1], personNr, deviceId);
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
@@ -165,7 +173,7 @@ export class HannafonRoom {
     const fromDevice = att.deviceId || data.fromDevice || "";
     if (data.type === "hello") {
       if (data.deviceId && data.deviceId !== att.deviceId) {
-        ws.serializeAttachment({ personNr: from, deviceId: String(data.deviceId) });
+        ws.serializeAttachment({ ...att, personNr: from, deviceId: String(data.deviceId) });
       }
       this.replayPending(ws, from, String(data.deviceId || att.deviceId || ""));
       this.sendMissed(from, ws);
@@ -207,7 +215,18 @@ export class HannafonRoom {
         return;
       }
       this.savePending(from, to, fromDevice, data.callId || null, payload);
+      const live = this.liveCount(to);
       this.forwardToPerson(to, payload);
+      if (!live) {
+        // V1.12: nobody of `to` is connected right now. The call stays pending
+        // (replayed when a device says hello) — tell the caller meanwhile.
+        try {
+          ws.send(JSON.stringify({ type: "callee-offline", from: to, callId: data.callId || null }));
+        } catch {
+          /* ignore */
+        }
+        console.log("hannafon call to offline", JSON.stringify({ from, to }));
+      }
       await this.notifyPush(from, to, data.fromName || "");
       return;
     }
@@ -475,9 +494,33 @@ export class HannafonRoom {
       try {
         ws.send(JSON.stringify({ ...msg, type: "call", replay: true, ice, age: Date.now() - row.created }));
         n++;
+        // V1.12: the caller may have been told "not connected": it rings now.
+        this.forwardToPerson(row.from_nr, { type: "callee-ringing", from: personNr, callId: msg.callId || null });
       } catch {
         /* ignore */
       }
+    }
+    return n;
+  }
+
+  // V1.12: sockets of a person that are plausibly alive. A socket whose client
+  // pings (V1.12+) but has not pinged for STALE_MS is a dead/half-open socket.
+  // Sockets that never pinged (older app versions) still count as alive.
+  static STALE_MS = 75000;
+  liveCount(personNr) {
+    const set = this.byPerson.get(personNr);
+    if (!set) return 0;
+    const now = Date.now();
+    let n = 0;
+    for (const sock of set) {
+      let ts = null;
+      try {
+        ts = this.ctx.getWebSocketAutoResponseTimestamp(sock);
+      } catch {
+        ts = null;
+      }
+      if (ts && now - ts.getTime() > HannafonRoom.STALE_MS) continue;
+      n++;
     }
     return n;
   }

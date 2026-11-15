@@ -1834,6 +1834,77 @@ async function run() {
       results.push("host incoming rings (file), decline stops it");
     }
 
+    // V1.12 reachability: heartbeat ping/pong via the Worker edge, a dead
+    // (half-open) host socket is detected and replaced so the call still
+    // arrives; a call tapped while the caller's own socket reconnects is
+    // queued, not lost; a call to an offline host tells the caller and rings
+    // as soon as the host is back.
+    {
+      const callerCtx = await phoneContext(browser, iphone14);
+      const caller = await callerCtx.newPage();
+      await enterCode(caller);
+      await identify(caller, 22);
+      await caller.locator("#screen-standby").waitFor({ state: "visible", timeout: 10000 });
+      await caller.waitForTimeout(800);
+      const sig = (pg) => pg.evaluate(() => window.__hannafonTest.signalingDebug());
+      const endCall = async (label) => {
+        await hanna.locator("#btn-decline").click();
+        await hanna.locator("#screen-photo").waitFor({ state: "visible", timeout: 10000 });
+        if (await caller.locator("#btn-hangup").isVisible().catch(() => false)) await caller.locator("#btn-hangup").click();
+        await caller.locator("#screen-standby").waitFor({ state: "visible", timeout: 15000 });
+        await caller.waitForTimeout(600);
+        process.stdout.write(`reachability ${label} ok\n`);
+      };
+
+      // a) heartbeat: fast timing, pongs come back from the Worker.
+      await hanna.evaluate(() => window.__hannafonTest.signalingTiming(1500, 1500));
+      await hanna.waitForFunction(() => window.__hannafonTest.signalingDebug().pongs >= 2, null, { timeout: 8000 })
+        .catch(async () => { throw new Error("host heartbeat: no pong from the Worker " + JSON.stringify(await sig(hanna))); });
+
+      // b) host socket goes half-open (OPEN but dead): the call must still arrive.
+      const before = await sig(hanna);
+      await hanna.evaluate(() => window.__hannafonTest.signalingStall());
+      await caller.locator("#btn-call-host").click();
+      await hanna.locator("#screen-incoming").waitFor({ state: "visible", timeout: 15000 })
+        .catch(async () => { throw new Error("call lost on a dead host socket " + JSON.stringify(await sig(hanna))); });
+      const afterDead = await sig(hanna);
+      if (afterDead.deadReconnects <= before.deadReconnects) throw new Error("dead socket was not detected " + JSON.stringify(afterDead));
+      await endCall("dead-socket");
+
+      // c) caller taps while its own socket is reconnecting: queued, then sent.
+      await caller.evaluate(() => window.__hannafonTest.signalingPause());
+      await caller.locator("#btn-call-host").click();
+      await caller.waitForTimeout(1200);
+      const q = await sig(caller);
+      if (q.outbox < 1) throw new Error("call must be queued while not connected " + JSON.stringify(q));
+      await caller.evaluate(() => window.__hannafonTest.signalingResume());
+      await hanna.locator("#screen-incoming").waitFor({ state: "visible", timeout: 15000 })
+        .catch(async () => { throw new Error("queued call never arrived " + JSON.stringify(await sig(caller))); });
+      await endCall("queued-call");
+
+      // d) host offline: caller is told, host rings when it is back.
+      await hanna.evaluate(() => window.__hannafonTest.signalingPause());
+      await hanna.waitForTimeout(800);
+      await caller.locator("#btn-call-host").click();
+      await caller.waitForFunction(() => /nicht verbunden/.test(document.getElementById("call-status")?.textContent || ""), null, { timeout: 10000 })
+        .catch(async () => { throw new Error("caller must see 'nicht verbunden' " + await caller.locator("#call-status").innerText()); });
+      const offTxt = (await caller.locator("#call-status").innerText()).trim();
+      await shot(caller, "v112-caller-host-offline.jpg");
+      await hanna.evaluate(() => window.__hannafonTest.signalingResume());
+      await hanna.locator("#screen-incoming").waitFor({ state: "visible", timeout: 15000 });
+      await caller.waitForFunction(() => /^Warten auf /.test(document.getElementById("call-status")?.textContent || ""), null, { timeout: 8000 })
+        .catch(async () => { throw new Error("caller status must go back to 'Warten auf' " + await caller.locator("#call-status").innerText()); });
+      await endCall("host-offline");
+
+      await hanna.evaluate(() => window.__hannafonTest.signalingTiming(25000, 8000));
+      const wl = await hanna.evaluate(async () => { await window.__hannafonTest.syncWakeLock(); return { api: !!navigator.wakeLock, held: window.__hannafonTest.wakeLockHeld() }; });
+      await openDisconnectDialog(caller);
+      await confirmDisconnect(caller);
+      await caller.close();
+      await callerCtx.close();
+      results.push(`V1.12 reachability: pong heartbeat, dead host socket replaced and call arrives, call queued while reconnecting, offline host -> caller sees "${offTxt}" then rings on reconnect; wake lock api=${wl.api} held=${wl.held}`);
+    }
+
     // V1.08 missed calls for Hanna: button bottom left only while calls wait,
     // list like the Adressbuch, cleared when she leaves it, persisted on the worker.
     {
@@ -2275,8 +2346,8 @@ async function run() {
 
     // Structural push endpoint (no delivery assertion locally)
     const health = await fetch(HEALTH).then((r) => r.json());
-    if (!health.ok || health.version !== "V1.11") throw new Error("health/version");
-    results.push("worker health V1.11");
+    if (!health.ok || health.version !== "V1.12") throw new Error("health/version");
+    results.push("worker health V1.12");
 
     console.log("E2E OK:", results.join(", "));
     console.log("screenshots:", fs.readdirSync(shots).join(", "));

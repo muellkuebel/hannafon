@@ -1287,6 +1287,7 @@ async function afterAuth(cfg, code) {
   const idNr = Number(localStorage.getItem(STORAGE_IDENTITY) || 0);
   state.identity = idNr ? personByNr(idNr) : null;
   applyKeepAlivePref();
+  syncWakeLock();
   if (state.identity) connectSignaling();
   const incoming = incomingFromUrl();
   goHome();
@@ -1378,6 +1379,7 @@ ui.btnConfirm.addEventListener("click", () => {
   state.identity = state.zoomed;
   localStorage.setItem(STORAGE_IDENTITY, String(state.identity.nr));
   applyKeepAlivePref();
+  syncWakeLock();
   connectSignaling();
   goHome();
 });
@@ -1751,7 +1753,52 @@ function connectSignaling() {
   state.signaling.on("reject", () => hangup(true));
   state.signaling.on("taken", onCallTakenElsewhere);
   state.signaling.on("missed", onMissed);
+  state.signaling.on("callee-offline", onCalleeOffline);
+  state.signaling.on("callee-ringing", onCalleeRinging);
 }
+
+// V1.12: the Worker saw no live device of the person we are calling. The call
+// stays pending there and rings as soon as one of their devices is back.
+function calleeOfflineText(name) {
+  return `${name} ist gerade nicht verbunden. Es klingelt, sobald ${name} wieder online ist.`;
+}
+function onCalleeOffline(data) {
+  const p = state.inCallWith;
+  if (!state.outgoing || state.group || !p || Number(p.nr) !== Number(data?.from)) return;
+  if (state.pc && state.pc.remoteDescription) return; // already answered
+  ui.callStatus.textContent = calleeOfflineText(p.name);
+  ui.callStatus.dataset.offline = "1";
+}
+function onCalleeRinging(data) {
+  const p = state.inCallWith;
+  if (!state.outgoing || state.group || !p || Number(p.nr) !== Number(data?.from)) return;
+  if (ui.callStatus.dataset.offline !== "1") return;
+  delete ui.callStatus.dataset.offline;
+  ui.callStatus.textContent = `Warten auf ${p.name}…`;
+}
+
+// V1.12: Hanna's iPad stays awake while Hannafon is open (screen wake lock),
+// so the display does not auto-lock and suspend the page (and its socket).
+// Guests are not affected. Re-acquired when the page becomes visible again.
+let wakeLock = null;
+async function syncWakeLock() {
+  const want =
+    document.visibilityState === "visible" && !!state.identity && !!state.config &&
+    isHostPerson(state.identity, state.config) && !!navigator.wakeLock;
+  if (want && !wakeLock) {
+    try {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    } catch {
+      wakeLock = null;
+    }
+  } else if (!want && wakeLock) {
+    try { await wakeLock.release(); } catch { /* ignore */ }
+    wakeLock = null;
+  }
+}
+document.addEventListener("visibilitychange", () => { syncWakeLock(); });
+document.addEventListener("pointerdown", () => { if (!wakeLock) syncWakeLock(); }, { passive: true });
 
 function onCallTakenElsewhere() {
   if (state.outgoing || state.pc) return;
@@ -1818,6 +1865,7 @@ async function startCall(person) {
   state.peerDevice = null;
   showScreen("call");
   ui.callStatus.textContent = `Warten auf ${person.name}…`;
+  delete ui.callStatus.dataset.offline;
   try {
     state.localStream = await getLocalStream();
     ui.localVideo.srcObject = state.localStream;
@@ -2757,6 +2805,7 @@ async function disconnectThisDevice() {
   state.missed = [];
   state.identity = null;
   applyKeepAlivePref();
+  syncWakeLock();
   show(ui.ringSheet, false);
   state.mode = "setup";
   show(ui.disconnectSheet, false);
@@ -2863,6 +2912,7 @@ async function disconnectThisDevice() {
 // call that started meanwhile is replayed by the Worker.
 function reviveSignaling() {
   if (document.visibilityState !== "visible") return;
+  syncWakeLock();
   if (!state.identity || !state.config || state.inCallWith) return;
   state.signaling.reconnect();
 }
@@ -2873,6 +2923,13 @@ bindAudioUnlock();
 tryStoredCode();
 
 window.__hannafonTest = {
+  signalingDebug: () => state.signaling.debug(),
+  signalingStall: () => state.signaling.testStall(),
+  signalingPause: () => state.signaling.pause(),
+  signalingResume: () => state.signaling.resume(),
+  signalingTiming: (hb, pong) => state.signaling.setTiming(hb, pong),
+  wakeLockHeld: () => !!wakeLock,
+  syncWakeLock: () => syncWakeLock(),
   ready: () => !!(state.config && state.layout && ui.sharp?.naturalWidth),
   localStream: () => state.localStream,
   facePoint(nr) {
